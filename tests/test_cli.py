@@ -15,3 +15,9 @@ def test_cli_ingest_and_search(tmp_path):
     result = json.loads(run('search','protocol').stdout)
     assert result[0]['title'] == 'Interface'
     assert result[0]['start_line'] == 1
+
+def test_cli_requires_both_env_file_and_slot_for_model(tmp_path):
+    env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1]/'src'))
+    result = subprocess.run([sys.executable,'-m','quix_knowledge','--db',str(tmp_path/'db'),'search','retry','--variant','decision','--model-slot','2'],env=env,capture_output=True,text=True)
+    assert result.returncode != 0
+    assert '--env-file' in result.stderr

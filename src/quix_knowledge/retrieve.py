@@ -9,6 +9,8 @@ def tokens(text):
 def search(db, query, variant='baseline', role=None, role_version=None, provider=None, limit=10):
     if variant not in {'baseline','topic','decision','role'}:
         raise ValueError('unknown retrieval variant')
+    if limit < 0:
+        raise ValueError('limit must be nonnegative')
     query_tokens = tokens(query)
     rows = db.execute("SELECT sections.*,sources.path,sources.revision,sources.status AS source_status FROM sections JOIN sources ON sources.id=sections.source_id WHERE sources.status='current'").fetchall()
     results = []
@@ -26,16 +28,18 @@ def search(db, query, variant='baseline', role=None, role_version=None, provider
         if not lexical and not topic:
             continue
         item.update(lexical_score=lexical,topic_score=topic,topics=topics,role_score=None,decision=None)
-        if variant in {'decision','role'} and provider is not None:
-            item['decision'] = judge(provider, {'query':query,'title':item['title'],'text':item['body']}, 'relevant')
-            decision = item['decision']
-            db.execute('INSERT INTO decision_receipts(provider,model,outcome,detail) VALUES (?,?,?,?)',(decision.get('provider','unknown'),decision.get('model'),decision['outcome'],json.dumps({'item_id':item['id'],'query':query,'reason':decision.get('reason')})))
         if variant == 'role' and role and role_version:
             annotation = db.execute(f"SELECT score FROM role_annotations WHERE {column}=? AND role=? AND role_version=? AND source_revision IS ? AND status IN ('accepted','proposed') ORDER BY id DESC LIMIT 1",(item['id'],role,role_version,item['revision'])).fetchone()
             if annotation:
                 item['role_score'] = annotation[0]
-        decision_adjustment = {'supported':0.1,'unsuitable':-0.1}.get((item['decision'] or {}).get('outcome'),0)
-        item['score'] = lexical + topic + decision_adjustment + (0.25 * item['role_score'] if item['role_score'] is not None else 0)
+        item['score'] = lexical + topic + (0.25 * item['role_score'] if item['role_score'] is not None else 0)
         results.append(item)
+    results = sorted(results,key=lambda x:(-x['score'],x['id']))[:limit]
+    if variant in {'decision','role'} and provider is not None:
+        for item in results:
+            item['decision'] = judge(provider, {'query':query,'title':item['title'],'text':item['body']}, 'relevant')
+            decision = item['decision']
+            item['score'] += {'supported':0.1,'unsuitable':-0.1}.get(decision['outcome'],0)
+            db.execute('INSERT INTO decision_receipts(provider,model,outcome,detail) VALUES (?,?,?,?)',(decision.get('provider','unknown'),decision.get('model'),decision['outcome'],json.dumps({'item_id':item['id'],'query':query,'reason':decision.get('reason'),'probability':decision.get('probability'),'usage':decision.get('usage'),'request_id':decision.get('request_id'),'thresholds':decision.get('thresholds')})))
     db.commit()
-    return sorted(results,key=lambda x:(-x['score'],x['id']))[:limit]
+    return sorted(results,key=lambda x:(-x['score'],x['id']))

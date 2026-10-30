@@ -35,3 +35,27 @@ def test_agent_claim_is_returned_with_evidence_and_failure_receipt(tmp_path):
     assert by_id['unsupported']['unsupported'] is True
     assert len(results) == 3
     assert db.execute('SELECT COUNT(*) FROM decision_receipts').fetchone()[0] == 3
+
+def test_receipt_keeps_probability_and_usage(tmp_path):
+    import json
+    db = open_catalog(':memory:')
+    path = tmp_path/'doc.md'
+    path.write_text('# Retry\nretry behavior')
+    ingest(db,path)
+    provider = lambda s,q: {'outcome':'unclear','provider':'openrouter','model':'m','probability':0.7,'usage':{'cost':0.01}}
+    search(db,'retry',variant='decision',provider=provider)
+    detail = json.loads(db.execute('SELECT detail FROM decision_receipts').fetchone()[0])
+    assert detail['probability'] == 0.7
+    assert detail['usage']['cost'] == 0.01
+
+def test_decision_call_count_respects_candidate_budget(tmp_path):
+    db = open_catalog(':memory:')
+    path = tmp_path/'doc.md'
+    path.write_text('# One\nretry\n# Two\nretry\n# Three\nretry\n')
+    ingest(db,path)
+    calls=[]
+    def provider(state,question):
+        calls.append(state)
+        return {'outcome':'unclear','provider':'fake'}
+    assert len(search(db,'retry',variant='decision',provider=provider,limit=1)) == 1
+    assert len(calls) == 1

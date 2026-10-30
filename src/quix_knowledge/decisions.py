@@ -18,5 +18,5 @@ def assess_topic(db, section_id, topic, provider):
     status = 'rejected' if result['outcome'] == 'unsuitable' else 'proposed'
     with db:
         db.execute('INSERT INTO topic_links(section_id,topic,method,status) VALUES (?,?,?,?)',(section_id,topic,'decision',status))
-        db.execute('INSERT INTO decision_receipts(provider,model,outcome,detail) VALUES (?,?,?,?)',(result.get('provider','unknown'),result.get('model'),result['outcome'],json.dumps({'section_id':section_id,'topic':topic,'reason':result.get('reason')})))
+        db.execute('INSERT INTO decision_receipts(provider,model,outcome,detail) VALUES (?,?,?,?)',(result.get('provider','unknown'),result.get('model'),result['outcome'],json.dumps({'section_id':section_id,'topic':topic,'reason':result.get('reason'),'probability':result.get('probability'),'usage':result.get('usage'),'request_id':result.get('request_id'),'thresholds':result.get('thresholds')})))
     return result
