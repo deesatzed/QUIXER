@@ -163,3 +163,29 @@ def test_model_fallback_preserves_lexical_broadening_reason(tmp_path):
     row=search(db,'failure',variant='decision',provider=lambda *args: {'outcome':'unclear','provider':'fake'})[0]
     assert row['fallback_reason'] == 'decision_unclear'
     assert row['lexical_fallback_reason'] == 'lexical_broadened'
+
+def test_source_changed_during_decision_never_returns_old_section(tmp_path):
+    db=open_catalog(':memory:')
+    path=tmp_path/'doc.md'
+    path.write_text('# Retry\nRetry is allowed.')
+    old=ingest(db,path)
+    def provider(*args):
+        path.write_text('# Retry\nRetry is prohibited.')
+        ingest(db,path)
+        return {'outcome':'supported','provider':'fixture'}
+    rows=search(db,'retry',variant='decision',provider=provider)
+    assert rows and all(row['source_id'] != old for row in rows)
+    assert rows[0]['fallback_reason'] == 'source_changed'
+    assert db.execute('SELECT outcome FROM decision_receipts').fetchone()[0] == 'unknown'
+
+def test_source_removed_during_decision_never_returns_old_section(tmp_path):
+    db=open_catalog(':memory:')
+    path=tmp_path/'doc.md'
+    path.write_text('# Retry\nRetry is allowed.')
+    ingest(db,path)
+    def provider(*args):
+        path.unlink()
+        ingest(db,path)
+        return {'outcome':'supported','provider':'fixture'}
+    assert search(db,'retry',variant='decision',provider=provider) == []
+    assert db.execute('SELECT outcome FROM decision_receipts').fetchone()[0] == 'unknown'

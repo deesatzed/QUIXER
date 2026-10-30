@@ -8,6 +8,16 @@ from .decisions import assess_topic, judge, decision_metadata
 from .ingest import ingest
 
 
+def _finish_index(db, result, before, started):
+    receipts = db.execute('SELECT id,detail FROM decision_receipts WHERE id>? ORDER BY id',(before,)).fetchall()
+    usage = [json.loads(row['detail']).get('usage') or {} for row in receipts]
+    def complete_sum(key):
+        values = [u.get(key) for u in usage]
+        return sum(values) if values and all(isinstance(value,(int,float)) and not isinstance(value,bool) for value in values) else None
+    result.update(elapsed_seconds=time.monotonic()-started,receipt_ids=[row['id'] for row in receipts],reported_cost=complete_sum('cost'),input_tokens=complete_sum('input_tokens'))
+    return result
+
+
 def _paragraphs(text, max_chars=1200):
     """Extract source spans, splitting long paragraphs without inventing text."""
     for match in re.finditer(r'\S.*?(?=\n[ \t]*\n|\Z)', text, flags=re.DOTALL):
@@ -52,6 +62,13 @@ def _propose_generated(db, section, provider, decision_budget):
         if provider is not None and calls < decision_budget:
             judgment = judge(provider, {'title':title, 'text':body, 'topic':title}, 'topic supported')
             calls += 1
+        current = db.execute("SELECT 1 FROM sections JOIN sources ON sections.source_id=sources.id WHERE sections.id=? AND sources.status='current'",(section['id'],)).fetchone()
+        if current is None:
+            if judgment:
+                judgment = dict(judgment,outcome='unknown',reason='source changed during decision')
+                with db:
+                    db.execute('INSERT INTO decision_receipts(provider,model,outcome,detail) VALUES (?,?,?,?)',(judgment.get('provider','unknown'),judgment.get('model'),judgment['outcome'],json.dumps({'section_id':section['id'],'generated_index_id':entry_id,'question':'topic supported',**decision_metadata(judgment)})))
+            break
         status = 'rejected' if judgment and judgment['outcome'] == 'unsuitable' else 'proposed'
         with db:
             if existing or restored:
@@ -89,15 +106,27 @@ def index_source(db, path, provider=None, max_decisions=10):
         # A compact structure sample is not a complete document-quality assessment.
         state = {'sections': [{'title': s['title'], 'generated': bool(s['generated']), 'text': s['body'][:1000]} for s in sections[:5]], 'section_count': len(sections)}
         judgment = judge(provider, state, 'structure usable')
+        current = db.execute("SELECT 1 FROM sources WHERE id=? AND status='current'",(source_id,)).fetchone()
+        if current is None:
+            judgment = dict(judgment,outcome='unknown',reason='source changed during decision')
         result['structure_judgment'] = judgment
         result['decision_calls'] += 1
         with db:
             db.execute('INSERT INTO decision_receipts(provider,model,outcome,detail) VALUES (?,?,?,?)', (judgment.get('provider','unknown'), judgment.get('model'), judgment['outcome'], json.dumps({'source_id': source_id, 'question': 'structure usable', **decision_metadata(judgment)})))
+        if current is None:
+            result['status'] = 'source_changed'
+            return _finish_index(db,result,before,started)
     for section in sections:
+        if db.execute("SELECT 1 FROM sources WHERE id=? AND status='current'",(source_id,)).fetchone() is None:
+            result['status'] = 'source_changed'
+            break
         if section['generated']:
             created, calls = _propose_generated(db, section, provider, max_decisions-result['decision_calls'])
             result['generated_entries'] += created
             result['decision_calls'] += calls
+            if db.execute("SELECT 1 FROM sources WHERE id=? AND status='current'",(source_id,)).fetchone() is None:
+                result['status'] = 'source_changed'
+                break
             continue
         if not section['title'].strip():
             continue
@@ -114,15 +143,15 @@ def index_source(db, path, provider=None, max_decisions=10):
             else:
                 with db:
                     db.execute('INSERT INTO topic_links(section_id,topic,method,status) VALUES (?,?,?,?)', (section['id'], section['title'], 'heading', 'proposed'))
+        if db.execute("SELECT 1 FROM sources WHERE id=? AND status='current'",(source_id,)).fetchone() is None:
+            result['status'] = 'source_changed'
+            break
         structure_rejected = (result['structure_judgment'] or {}).get('outcome') == 'unsuitable'
         if structure_rejected or sum(1 for _ in _paragraphs(section['body'])) > 1:
             created, calls = _propose_generated(db, section, provider, max_decisions-result['decision_calls'])
             result['generated_entries'] += created
             result['decision_calls'] += calls
-    receipts = db.execute('SELECT id,detail FROM decision_receipts WHERE id>? ORDER BY id',(before,)).fetchall()
-    usage = [json.loads(row['detail']).get('usage') or {} for row in receipts]
-    def complete_sum(key):
-        values = [u.get(key) for u in usage]
-        return sum(values) if values and all(isinstance(value,(int,float)) and not isinstance(value,bool) for value in values) else None
-    result.update(elapsed_seconds=time.monotonic()-started,receipt_ids=[row['id'] for row in receipts],reported_cost=complete_sum('cost'),input_tokens=complete_sum('input_tokens'))
-    return result
+        if db.execute("SELECT 1 FROM sources WHERE id=? AND status='current'",(source_id,)).fetchone() is None:
+            result['status'] = 'source_changed'
+            break
+    return _finish_index(db,result,before,started)

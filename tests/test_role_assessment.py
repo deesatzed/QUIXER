@@ -49,3 +49,40 @@ def test_role_score_is_version_specific_and_stales_with_source(tmp_path):
     ingest(db,path)
     assert db.execute('SELECT status FROM role_annotations').fetchone()[0] == 'stale'
     assert search(db,'retry',variant='role',role='reviewer',role_version='1')[0]['role_score'] is None
+
+def test_generated_topics_have_distinct_role_scores(tmp_path):
+    from quix_knowledge.indexing import index_source
+    db=open_catalog(':memory:')
+    path=tmp_path/'doc.txt'
+    path.write_text('Retry tests expose defects.\n\nRetry style improves prose.')
+    index_source(db,path)
+    entries=db.execute('SELECT id,title FROM generated_index ORDER BY start_offset').fetchall()
+    def provider(state,question):
+        value=0.9 if 'tests' in state['text'] else 0.1
+        return {'outcome':'unclear','provider':'fixture','model':'m','probability':value}
+    for entry in entries:
+        assess_role(db,entry['id'],'reviewer','1','Find defects',provider)
+    rows=search(db,'retry',variant='role',role='reviewer',role_version='1',include_proposed=True)
+    generated=[r for r in rows if r['record_type']=='generated_index']
+    by_id={r['id']:r for r in generated}
+    assert by_id[entries[0]['id']]['role_score'] == 0.9
+    assert by_id[entries[1]['id']]['role_score'] == 0.1
+    assert by_id[entries[0]['id']]['role_score_scope'] == 'generated_index'
+    path.write_text('Retry tests changed.')
+    ingest(db,path)
+    assert {r[0] for r in db.execute('SELECT status FROM index_role_annotations')} == {'stale'}
+
+def test_source_changed_while_role_model_runs_does_not_create_annotation(tmp_path):
+    db=open_catalog(':memory:')
+    path=tmp_path/'doc.md'
+    path.write_text('# Retry\nRetry is allowed.')
+    ingest(db,path)
+    section=db.execute('SELECT id FROM sections').fetchone()[0]
+    def provider(*args):
+        path.write_text('# Retry\nRetry is prohibited.')
+        ingest(db,path)
+        return {'outcome':'unclear','provider':'fixture','probability':0.9}
+    result=assess_role(db,section,'reviewer','1','Find defects',provider)
+    assert result['outcome'] == 'unknown'
+    assert db.execute('SELECT count(*) FROM role_annotations').fetchone()[0] == 0
+    assert db.execute('SELECT outcome FROM decision_receipts').fetchone()[0] == 'unknown'

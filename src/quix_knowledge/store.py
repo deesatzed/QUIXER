@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS section_pages(section_id TEXT PRIMARY KEY REFERENCES 
 CREATE TABLE IF NOT EXISTS extraction_warnings(source_id TEXT NOT NULL REFERENCES sources(id),page INTEGER NOT NULL,reason TEXT NOT NULL,PRIMARY KEY(source_id,page));
 CREATE TABLE IF NOT EXISTS generated_index(id TEXT PRIMARY KEY,section_id TEXT NOT NULL REFERENCES sections(id),title TEXT NOT NULL,body TEXT NOT NULL,start_offset INTEGER NOT NULL CHECK(start_offset >= 0),end_offset INTEGER NOT NULL CHECK(end_offset > start_offset),status TEXT NOT NULL CHECK(status IN ('proposed','accepted','rejected','stale')),method TEXT NOT NULL,UNIQUE(section_id,start_offset,end_offset,method));
 CREATE TABLE IF NOT EXISTS generated_index_reviews(id INTEGER PRIMARY KEY,entry_id TEXT NOT NULL REFERENCES generated_index(id),reviewer TEXT NOT NULL,decision TEXT NOT NULL CHECK(decision IN ('accepted','rejected')),reviewed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));
+CREATE TABLE IF NOT EXISTS index_role_annotations(id INTEGER PRIMARY KEY,entry_id TEXT NOT NULL REFERENCES generated_index(id),role TEXT NOT NULL,role_version TEXT NOT NULL,score REAL NOT NULL CHECK(score BETWEEN 0 AND 1),method TEXT NOT NULL,model TEXT,source_revision TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('proposed','accepted','stale')),created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));
 """
 
 def open_catalog(path):
@@ -21,10 +22,10 @@ def open_catalog(path):
     db.row_factory = sqlite3.Row
     db.execute('PRAGMA foreign_keys=ON')
     version = db.execute('PRAGMA user_version').fetchone()[0]
-    if version not in (0, 1, 2, 3):
+    if version not in (0, 1, 2, 3, 4):
         db.close()
         raise ValueError(f'Unsupported schema version: {version}')
     db.executescript(SCHEMA)
-    db.execute('PRAGMA user_version=3')
+    db.execute('PRAGMA user_version=4')
     db.commit()
     return db

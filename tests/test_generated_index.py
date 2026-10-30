@@ -122,3 +122,17 @@ def test_broad_existing_heading_gets_topic_level_proposals(tmp_path):
     assert result['generated_entries'] == 3
     assert any(row['title'] == 'Audit records track outcomes.' for row in entries)
     assert all(row['status'] == 'proposed' for row in entries)
+
+def test_source_change_during_generated_assessment_never_publishes_entry(tmp_path):
+    db=open_catalog(':memory:')
+    path=tmp_path/'doc.txt'
+    path.write_text('Retry is allowed.')
+    def provider(state,question):
+        if question == 'topic supported':
+            path.write_text('Retry is prohibited.')
+            ingest(db,path)
+        return {'outcome':'supported','provider':'fixture'}
+    result=index_source(db,path,provider=provider,max_decisions=2)
+    assert result['status'] == 'source_changed'
+    assert db.execute('SELECT count(*) FROM generated_index').fetchone()[0] == 0
+    assert db.execute('SELECT outcome FROM decision_receipts ORDER BY id DESC LIMIT 1').fetchone()[0] == 'unknown'

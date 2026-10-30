@@ -109,7 +109,7 @@ def main():
             provider = configured_provider()
             result = index_source(db,args.path,provider=provider,max_decisions=args.max_decisions)
             print(json.dumps(result))
-            return 0 if result['source_id'] else 1
+            return 0 if result['source_id'] and result.get('status') != 'source_changed' else 1
         if args.command == 'experiment':
             from .experiment import run_experiment
             provider = configured_provider()

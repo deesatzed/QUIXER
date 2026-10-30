@@ -83,3 +83,33 @@ def test_negative_structure_decision_proposes_finer_entries_without_discarding_s
     assert result['generated_entries'] == 1
     assert db.execute('SELECT status FROM generated_index').fetchone()[0] == 'proposed'
     assert db.execute('SELECT count(*) FROM sections').fetchone()[0] == 1
+
+def test_source_change_during_structure_decision_does_not_create_stale_proposals(tmp_path):
+    from quix_knowledge.ingest import ingest
+    db=open_catalog(':memory:')
+    path=tmp_path/'doc.md'
+    path.write_text('# Retry\nRetry is allowed.')
+    def provider(state,question):
+        path.write_text('# Retry\nRetry is prohibited.')
+        ingest(db,path)
+        return {'outcome':'unsuitable','provider':'fixture'}
+    result=index_source(db,path,provider=provider,max_decisions=2)
+    assert result['structure_judgment']['outcome'] == 'unknown'
+    assert result['decision_calls'] == 1
+    assert db.execute('SELECT count(*) FROM generated_index').fetchone()[0] == 0
+    assert db.execute('SELECT count(*) FROM topic_links').fetchone()[0] == 0
+
+def test_source_change_during_topic_assessment_does_not_create_stale_link(tmp_path):
+    from quix_knowledge.ingest import ingest
+    db=open_catalog(':memory:')
+    path=tmp_path/'doc.md'
+    path.write_text('# Retry\nRetry is allowed.')
+    def provider(state,question):
+        if question == 'topic supported':
+            path.write_text('# Retry\nRetry is prohibited.')
+            ingest(db,path)
+        return {'outcome':'unclear','provider':'fixture'}
+    result=index_source(db,path,provider=provider,max_decisions=2)
+    assert result['status'] == 'source_changed'
+    assert db.execute('SELECT count(*) FROM topic_links').fetchone()[0] == 0
+    assert db.execute("SELECT outcome FROM decision_receipts ORDER BY id DESC LIMIT 1").fetchone()[0] == 'unknown'

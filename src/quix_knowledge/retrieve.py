@@ -61,14 +61,22 @@ def search(db, query, variant='baseline', role=None, role_version=None, provider
         broad_score = len(_singular_tokens(query) & _singular_tokens(broad_text))
         if not lexical and not topic and not broad_score:
             continue
-        item.update(lexical_score=lexical,topic_score=topic,topics=topics,role_score=None,role_score_status=None,role_score_method=None,role_score_model=None,decision=None)
+        item.update(lexical_score=lexical,topic_score=topic,topics=topics,role_score=None,role_score_status=None,role_score_method=None,role_score_model=None,role_score_scope=None,decision=None)
         if variant == 'role' and role and role_version:
-            annotation = db.execute(f"SELECT score,status,method,model FROM role_annotations WHERE {column}=? AND role=? AND role_version=? AND source_revision IS ? AND status IN ('accepted','proposed') ORDER BY id DESC LIMIT 1",(annotation_id,role,role_version,item['revision'])).fetchone()
+            annotation = None
+            scope = 'record' if item['record_type'] == 'agent_record' else 'section'
+            if item['record_type'] == 'generated_index':
+                annotation = db.execute("SELECT score,status,method,model FROM index_role_annotations WHERE entry_id=? AND role=? AND role_version=? AND source_revision=? AND status IN ('accepted','proposed') ORDER BY id DESC LIMIT 1",(item['id'],role,role_version,item['revision'])).fetchone()
+                if annotation:
+                    scope = 'generated_index'
+            if annotation is None:
+                annotation = db.execute(f"SELECT score,status,method,model FROM role_annotations WHERE {column}=? AND role=? AND role_version=? AND source_revision IS ? AND status IN ('accepted','proposed') ORDER BY id DESC LIMIT 1",(annotation_id,role,role_version,item['revision'])).fetchone()
             if annotation:
                 item['role_score'] = annotation['score']
                 item['role_score_status'] = annotation['status']
                 item['role_score_method'] = annotation['method']
                 item['role_score_model'] = annotation['model']
+                item['role_score_scope'] = scope
         item['score'] = lexical + topic + (0.25 * item['role_score'] if item['role_score'] is not None else 0)
         if lexical or topic:
             results.append(item)
@@ -80,17 +88,32 @@ def search(db, query, variant='baseline', role=None, role_version=None, provider
         results = broadened
     results = sorted(results,key=lambda x:(-x['score'],x['id']))[:limit]
     if variant in {'decision','role'} and provider is not None:
+        source_changed = False
         for item in results:
             item['decision'] = judge(provider, {'query':query,'title':item['title'],'text':item['body'][:4000], 'text_truncated':len(item['body']) > 4000}, 'relevant')
             decision = item['decision']
+            if item['record_type'] == 'agent_record':
+                current = db.execute("SELECT 1 FROM records WHERE id=? AND status IN ('current','proposed')",(item['id'],)).fetchone()
+                refs = db.execute('SELECT sources.status FROM evidence JOIN sections ON sections.id=evidence.section_id JOIN sources ON sources.id=sections.source_id WHERE evidence.record_id=?',(item['id'],)).fetchall()
+                evidence_status = 'unsupported' if not refs else 'stale' if any(r[0] != 'current' for r in refs) else 'current'
+                source_changed = current is None or evidence_status != item['evidence_status']
+            else:
+                current = db.execute("SELECT 1 FROM sources WHERE id=? AND status='current' AND revision=?",(item['source_id'],item['revision'])).fetchone()
+                source_changed = current is None
+                if item['record_type'] == 'generated_index':
+                    source_changed = source_changed or db.execute("SELECT 1 FROM generated_index WHERE id=? AND status IN ('accepted','proposed')",(item['id'],)).fetchone() is None
+            if source_changed:
+                decision = item['decision'] = dict(decision,outcome='unknown',reason='source changed during decision')
             item['score'] += {'supported':0.1,'unsuitable':-0.1}.get(decision['outcome'],0)
             db.execute('INSERT INTO decision_receipts(provider,model,outcome,detail) VALUES (?,?,?,?)',(decision.get('provider','unknown'),decision.get('model'),decision['outcome'],json.dumps({'item_id':item['id'],'query':query,**decision_metadata(decision)})))
-        outcomes = [item['decision']['outcome'] for item in results]
-        if any(outcome in ('unknown','unclear') for outcome in outcomes):
-            reason = 'decision_unknown' if 'unknown' in outcomes else 'decision_unclear'
+            if source_changed:
+                break
+        outcomes = [item['decision']['outcome'] for item in results if item['decision'] is not None]
+        if source_changed or any(outcome in ('unknown','unclear') for outcome in outcomes):
+            reason = 'source_changed' if source_changed else 'decision_unknown' if 'unknown' in outcomes else 'decision_unclear'
             baseline = search(db,query,variant='baseline',limit=limit)
             decisions = {item['id']:item['decision'] for item in results}
-            results = baseline or results
+            results = baseline if source_changed else baseline or results
             for item in results:
                 item['decision'] = decisions.get(item['id'])
                 if item.get('fallback_reason') == 'lexical_broadened':

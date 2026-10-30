@@ -24,7 +24,7 @@ Inspect generated candidates with `list-index` and record an explicit named revi
 
 The optional search `--context-chars` bounds returned body text by characters. Alternatively, install the `tokens` extra and use `--context-tokens N --tokenizer cl100k_base` to bound each returned body's token count with the named `tiktoken` encoding. The sum is for body text only: titles, metadata, message framing and model-input tokens are excluded, and a named encoding may not match the agent's actual tokenizer. Agent findings report `evidence_status` as current, stale or unsupported; linked evidence does not prove the finding is true.
 
-To request a role-usefulness estimate for a section ID returned by search, use `assess-role SECTION_ID --role reviewer --role-version 1 --role-purpose 'Review implementation evidence' --env-file /Volumes/WS4TB/QUIX/.env --model-slot 2`. It records the source revision, role definition and model receipt; the score is a proposed estimate, not calibrated utility. An error records an unknown result and does not invent a score. Increment the role version when its purpose changes.
+To request a role-usefulness estimate for a section ID or generated-index ID returned by search, use `assess-role ID --role reviewer --role-version 1 --role-purpose 'Review implementation evidence' --env-file /Volumes/WS4TB/QUIX/.env --model-slot 2`. It records the source revision, role definition and model receipt; the score is a proposed estimate, not calibrated utility. A generated topic's score takes precedence over its parent section's score, and the returned `role_score_scope` identifies which was used. An error records an unknown result and does not invent a score. Increment the role version when its purpose changes.
 
 ## Current limitations
 
