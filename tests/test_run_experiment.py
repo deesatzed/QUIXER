@@ -28,3 +28,26 @@ def test_run_rejects_missing_or_duplicate_task_ids(tmp_path):
     db = open_catalog(':memory:')
     with pytest.raises(ValueError):
         run_experiment(db,[{'id':'x','query':'a'}, {'id':'x','query':'b'}])
+
+def test_experiment_records_common_token_budget(tmp_path):
+    db=open_catalog(':memory:')
+    path=tmp_path/'doc.md'
+    path.write_text('# Retry\nRetry with a bounded budget.')
+    ingest(db,path)
+    report=run_experiment(db,[{'id':'q','query':'retry','labels':None}],context_chars=None,context_tokens=2,count_tokens=lambda text:len(text.split()),tokenizer_name='fixture-words')
+    assert report['manifest']['context_tokens'] == 2
+    assert report['manifest']['tokenizer'] == 'fixture-words'
+    for variant in report['variants'].values():
+        assert variant['queries']['q']['returned_body_tokens'] <= 2
+
+def test_experiment_can_explicitly_include_provisional_index(tmp_path):
+    from quix_knowledge.indexing import index_source
+    db=open_catalog(':memory:')
+    path=tmp_path/'doc.txt'
+    path.write_text('Retry helps outages.\n\nAudit tracks failures.')
+    index_source(db,path)
+    tasks=[{'id':'q','query':'audit','labels':None}]
+    report=run_experiment(db,tasks,include_proposed=True)
+    assert report['manifest']['include_proposed'] is True
+    assert any(r['record_type']=='generated_index' for r in report['variants']['topic']['queries']['q']['results'])
+    assert not any(r['record_type']=='generated_index' for r in report['variants']['baseline']['queries']['q']['results'])

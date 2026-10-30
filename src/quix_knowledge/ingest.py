@@ -8,6 +8,7 @@ def supersede_path(db, path):
     affected = "SELECT evidence.record_id FROM evidence JOIN sections ON sections.id=evidence.section_id JOIN sources ON sources.id=sections.source_id WHERE sources.path=? AND sources.status='current'"
     db.execute(f"UPDATE topic_links SET status='stale' WHERE record_id IN ({affected})", (path,))
     db.execute(f"UPDATE role_annotations SET status='stale' WHERE record_id IN ({affected})", (path,))
+    db.execute("UPDATE generated_index SET status='stale' WHERE section_id IN (SELECT sections.id FROM sections JOIN sources ON sources.id=sections.source_id WHERE sources.path=? AND sources.status='current')",(path,))
     db.execute("UPDATE topic_links SET status='stale' WHERE section_id IN (SELECT sections.id FROM sections JOIN sources ON sources.id=sections.source_id WHERE sources.path=? AND sources.status='current')",(path,))
     db.execute("UPDATE role_annotations SET status='stale' WHERE section_id IN (SELECT sections.id FROM sections JOIN sources ON sources.id=sections.source_id WHERE sources.path=? AND sources.status='current')",(path,))
     db.execute("UPDATE sources SET status='superseded' WHERE path=? AND status='current'",(path,))

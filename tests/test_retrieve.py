@@ -88,3 +88,35 @@ def test_context_budget_limits_text_without_destroying_anchors(tmp_path):
     assert results[0]['context_truncated'] is True
     assert results[0]['start_line'] in (1, 3)
     assert results[0]['path'] == str(path.resolve())
+
+def test_token_budget_uses_supplied_counter_without_splitting_text(tmp_path):
+    db = open_catalog(':memory:')
+    path = tmp_path/'doc.md'
+    path.write_text('# Retry\nretry with very long timeout\n# Logging\nretry trace logging')
+    ingest(db,path)
+    count = lambda text: len(text.split())
+    rows = search(db,'retry',context_tokens=3,count_tokens=count)
+    assert sum(count(row['body']) for row in rows) <= 3
+    assert rows[0]['context_truncated']
+    assert rows[0]['context_token_count'] == count(rows[0]['body'])
+
+def test_token_budget_requires_counter_and_excludes_char_budget():
+    import pytest
+    db = open_catalog(':memory:')
+    with pytest.raises(ValueError):
+        search(db,'retry',context_tokens=10)
+    with pytest.raises(ValueError):
+        search(db,'retry',context_tokens=10,count_tokens=len,context_chars=10)
+
+def test_uncertain_decision_falls_back_to_ungated_baseline(tmp_path):
+    db=open_catalog(':memory:')
+    path=tmp_path/'doc.md'
+    path.write_text('# True\nretry failure retry failure\n# Other\nretry unrelated content')
+    source=ingest(db,path)
+    rows=db.execute('SELECT id FROM sections WHERE source_id=? ORDER BY start_line',(source,)).fetchall()
+    add_topic(db,rows[1]['id'],'retry failure','manual','accepted')
+    def fail(*args):
+        raise TimeoutError()
+    results=search(db,'retry failure',variant='decision',provider=fail,limit=1)
+    assert results[0]['id'] == rows[0]['id']
+    assert results[0]['fallback_reason'] == 'decision_unknown'
