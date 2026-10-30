@@ -17,10 +17,12 @@ def _singular_tokens(text):
         result.add(token)
     return result
 
-def search(db, query, variant='baseline', role=None, role_version=None, provider=None, limit=10, context_chars=None, include_proposed=False, context_tokens=None, count_tokens=None):
+def search(db, query, variant='baseline', role=None, role_version=None, provider=None, limit=10, context_chars=None, include_proposed=False, context_tokens=None, count_tokens=None, ranking='overlap'):
     validate_retrievable_ids(db)
     if variant not in {'baseline','topic','decision','role'}:
         raise ValueError('unknown retrieval variant')
+    if ranking not in ('overlap','bm25'):
+        raise ValueError('unknown ranking method')
     if limit < 0:
         raise ValueError('limit must be nonnegative')
     if context_chars is not None and context_chars < 0:
@@ -51,8 +53,13 @@ def search(db, query, variant='baseline', role=None, role_version=None, provider
         evidence_status = 'unsupported' if not refs else 'stale' if any(r[1] != 'current' for r in refs) else 'current'
         item.update(record_type='agent_record',title=item['kind'],path=None,revision=None,source_status=item['status'],evidence=evidence,unsupported=not evidence,evidence_status=evidence_status)
         candidates.append(item)
-    for item in candidates:
-        lexical = len(query_tokens & tokens(item['title']+' '+item['body']))
+    if ranking == 'bm25':
+        from .bm25 import score_documents
+        corpus = [item['title']+' '+item['body'] for item in candidates if item['record_type'] != 'generated_index']
+        lexical_scores = score_documents(query,[item['title']+' '+item['body'] for item in candidates],corpus=corpus)
+    else:
+        lexical_scores = [len(query_tokens & tokens(item['title']+' '+item['body'])) for item in candidates]
+    for item, lexical in zip(candidates,lexical_scores):
         column = 'record_id' if item['record_type'] == 'agent_record' else 'section_id'
         annotation_id = item['source_section_id'] if item['record_type'] == 'generated_index' else item['id']
         topics = [r[0] for r in db.execute(f"SELECT topic FROM topic_links WHERE {column}=? AND status='accepted'",(annotation_id,))]
@@ -63,7 +70,7 @@ def search(db, query, variant='baseline', role=None, role_version=None, provider
         broad_score = len(_singular_tokens(query) & _singular_tokens(broad_text))
         if not lexical and not topic and not broad_score:
             continue
-        item.update(lexical_score=lexical,topic_score=topic,topics=topics,role_score=None,role_score_status=None,role_score_method=None,role_score_model=None,role_score_scope=None,decision=None)
+        item.update(lexical_score=lexical,topic_score=topic,topics=topics,ranking_method=ranking,role_score=None,role_score_status=None,role_score_method=None,role_score_model=None,role_score_scope=None,decision=None)
         if variant == 'role' and role and role_version:
             annotation = None
             scope = 'record' if item['record_type'] == 'agent_record' else 'section'
@@ -79,7 +86,9 @@ def search(db, query, variant='baseline', role=None, role_version=None, provider
                 item['role_score_method'] = annotation['method']
                 item['role_score_model'] = annotation['model']
                 item['role_score_scope'] = scope
-        item['score'] = lexical + topic + (0.25 * item['role_score'] if item['role_score'] is not None else 0)
+        base = lexical + (0.05*topic if ranking == 'bm25' else topic)
+        role_boost = (min(0.25,0.1*base) if ranking == 'bm25' else 0.25) * item['role_score'] if item['role_score'] is not None else 0
+        item['score'] = base + role_boost
         if lexical or topic:
             results.append(item)
         else:
@@ -106,14 +115,15 @@ def search(db, query, variant='baseline', role=None, role_version=None, provider
                     source_changed = source_changed or db.execute("SELECT 1 FROM generated_index WHERE id=? AND status IN ('accepted','proposed')",(item['id'],)).fetchone() is None
             if source_changed:
                 decision = item['decision'] = dict(decision,outcome='unknown',reason='source changed during decision')
-            item['score'] += {'supported':0.1,'unsuitable':-0.1}.get(decision['outcome'],0)
+            adjustment = {'supported':1,'unsuitable':-1}.get(decision['outcome'],0)
+            item['score'] += adjustment * (min(0.1,0.1*item['score']) if ranking == 'bm25' else 0.1)
             db.execute('INSERT INTO decision_receipts(provider,model,outcome,detail) VALUES (?,?,?,?)',(decision.get('provider','unknown'),decision.get('model'),decision['outcome'],json.dumps({'item_id':item['id'],'query':query,**decision_metadata(decision)})))
             if source_changed:
                 break
         outcomes = [item['decision']['outcome'] for item in results if item['decision'] is not None]
         if source_changed or any(outcome in ('unknown','unclear') for outcome in outcomes):
             reason = 'source_changed' if source_changed else 'decision_unknown' if 'unknown' in outcomes else 'decision_unclear'
-            baseline = search(db,query,variant='baseline',limit=limit)
+            baseline = search(db,query,variant='baseline',limit=limit,ranking=ranking)
             decisions = {item['id']:item['decision'] for item in results}
             results = baseline if source_changed else baseline or results
             for item in results:

@@ -1,7 +1,7 @@
 """Build a bounded, provenance-carrying agent context packet."""
 import json
 
-_FIELDS = ('id','record_type','title','path','source_id','source_section_id','revision','source_status','index_status','start_line','end_line','page_start','page_end','start_offset','end_offset','evidence','evidence_status','unsupported','source_warning_pages','fallback_reason','lexical_fallback_reason','role_score','role_score_status','role_score_method','role_score_model','role_score_scope')
+_FIELDS = ('id','record_type','title','path','source_id','source_section_id','revision','source_status','index_status','start_line','end_line','page_start','page_end','start_offset','end_offset','evidence','evidence_status','unsupported','source_warning_pages','fallback_reason','lexical_fallback_reason','ranking_method','role_score','role_score_status','role_score_method','role_score_model','role_score_scope')
 
 
 def serialize_packet(packet):

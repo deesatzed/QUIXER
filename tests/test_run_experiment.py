@@ -134,3 +134,13 @@ def test_metrics_are_reported_separately_for_development_and_held_out(tmp_path):
     split=report['variants']['baseline']['metrics_by_split']
     assert split['development']['mean_recall'] == 1
     assert split['held_out']['mean_recall'] == 0
+
+def test_experiment_records_common_bm25_ranker(tmp_path):
+    db=open_catalog(':memory:')
+    path=tmp_path/'doc.md'
+    path.write_text('# Retry\nRetry after delay.')
+    ingest(db,path)
+    report=run_experiment(db,[{'id':'q','query':'retry','labels':None}],ranking='bm25')
+    assert report['manifest']['ranking'] == 'bm25'
+    for variant in report['variants'].values():
+        assert variant['queries']['q']['results'][0]['ranking_method'] == 'bm25'

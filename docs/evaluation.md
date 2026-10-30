@@ -34,4 +34,6 @@ The offline `calibrate SPEC.json` command replays explicitly supplied binary lab
 
 The [unlabeled project smoke run](../reports/2026-10-30-unlabeled-project-smoke.json) exercises five draft tasks on two project documents. The report omits source text, local paths and request IDs. Its topic links were provisional and no role annotations were present, so topic and role variants do not test those features. All labels were absent; recall and precision are not measured. Its timings and costs are observations from this one run, not performance benchmarks.
 
+An [unlabeled BM25 smoke](../reports/2026-10-30-bm25-unlabeled-smoke.json) runs the same five draft tasks and 400-token context-packet budget using both overlap and BM25 rankers. One baseline top result changed; without reviewed labels this is a difference in ordering, not evidence that either ranker is better. Candidate-ID metrics cannot by themselves establish that a truncated packet contains the needed passage.
+
 If running agents on these tasks, preserve their actual outputs and have an independent reviewer assess the outcomes separately from retrieval. Do not call synthetic tests or model responses evidence of improved swarm performance.
