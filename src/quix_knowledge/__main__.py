@@ -28,8 +28,8 @@ def main():
     role_parser.add_argument('--role',required=True)
     role_parser.add_argument('--role-version',required=True)
     role_parser.add_argument('--role-purpose',required=True)
-    role_parser.add_argument('--env-file',required=True)
-    role_parser.add_argument('--model-slot',type=int,choices=(1,2,3,4),required=True)
+    role_parser.add_argument('--env-file')
+    role_parser.add_argument('--model-slot',type=int,choices=(1,2,3,4))
     experiment_parser = sub.add_parser('experiment')
     experiment_parser.add_argument('tasks', help='JSON array of task records')
     exp_budget = experiment_parser.add_mutually_exclusive_group()
@@ -54,25 +54,36 @@ def main():
     search_parser.add_argument('--include-proposed', action='store_true')
     search_parser.add_argument('--env-file')
     search_parser.add_argument('--model-slot', type=int, choices=(1,2,3,4))
+    for provider_parser in (index_parser, role_parser, experiment_parser, search_parser):
+        provider_parser.add_argument('--jev-url',help='HTTP loopback JevEdge0 workbench origin')
+        provider_parser.add_argument('--stability-trials',type=int,default=1)
     args = parser.parse_args()
-    if args.command == 'index' and bool(args.env_file) != bool(args.model_slot):
-        parser.error('--env-file and --model-slot must be provided together')
-    if args.command == 'experiment' and bool(args.env_file) != bool(args.model_slot):
-        parser.error('--env-file and --model-slot must be provided together')
+    if args.command in ('index','assess-role','experiment','search'):
+        if bool(args.env_file) != bool(args.model_slot):
+            parser.error('--env-file and --model-slot must be provided together')
+        if args.jev_url and args.env_file:
+            parser.error('choose one decision provider')
+        if args.command == 'assess-role' and not (args.jev_url or args.env_file):
+            parser.error('assess-role requires a decision provider')
     if args.command == 'experiment' and bool(args.tokenizer) != (args.context_tokens is not None):
         parser.error('--context-tokens and --tokenizer must be provided together')
-    if args.command == 'search' and bool(args.env_file) != bool(args.model_slot):
-        parser.error('--env-file and --model-slot must be provided together')
-    if args.command == 'search' and args.env_file and args.variant not in ('decision','role'):
+    if args.command == 'search' and (args.env_file or args.jev_url) and args.variant not in ('decision','role'):
         parser.error('a model requires the decision or role variant')
     if args.command == 'search' and bool(args.tokenizer) != (args.context_tokens is not None):
         parser.error('--context-tokens and --tokenizer must be provided together')
     db = open_catalog(args.db)
     try:
+        def configured_provider():
+            if args.jev_url:
+                from .jevedge import JevEdgeDecision
+                return JevEdgeDecision(args.jev_url,stability_trials=args.stability_trials)
+            if args.env_file:
+                from .openrouter import load_settings, OpenRouterDecision
+                return OpenRouterDecision(load_settings(args.env_file,args.model_slot))
+            return None
         if args.command == 'assess-role':
             from .decisions import assess_role
-            from .openrouter import load_settings, OpenRouterDecision
-            provider = OpenRouterDecision(load_settings(args.env_file,args.model_slot))
+            provider = configured_provider()
             result = assess_role(db,args.section_id,args.role,args.role_version,args.role_purpose,provider)
             print(json.dumps(result))
             return 0 if result['outcome'] != 'unknown' else 1
@@ -95,19 +106,13 @@ def main():
             return 0 if source_id else 1
         if args.command == 'index':
             from .indexing import index_source
-            provider = None
-            if args.env_file:
-                from .openrouter import load_settings, OpenRouterDecision
-                provider = OpenRouterDecision(load_settings(args.env_file,args.model_slot))
+            provider = configured_provider()
             result = index_source(db,args.path,provider=provider,max_decisions=args.max_decisions)
             print(json.dumps(result))
             return 0 if result['source_id'] else 1
         if args.command == 'experiment':
             from .experiment import run_experiment
-            provider = None
-            if args.env_file:
-                from .openrouter import load_settings, OpenRouterDecision
-                provider = OpenRouterDecision(load_settings(args.env_file,args.model_slot))
+            provider = configured_provider()
             tasks = json.loads(Path(args.tasks).read_text(encoding='utf-8'))
             indexing_receipts = json.loads(Path(args.indexing_receipts).read_text(encoding='utf-8')) if args.indexing_receipts else None
             count_tokens = None
@@ -118,10 +123,7 @@ def main():
             context_chars = args.context_chars if args.context_chars is not None else (None if args.context_tokens is not None else 4000)
             print(json.dumps(run_experiment(db,tasks,provider=provider,context_chars=context_chars,context_tokens=args.context_tokens,count_tokens=count_tokens,tokenizer_name=args.tokenizer,limit=args.limit,label_provenance=args.label_provenance,include_proposed=args.include_proposed,indexing_receipt_ids=indexing_receipts)))
             return 0
-        provider = None
-        if args.env_file:
-            from .openrouter import load_settings, OpenRouterDecision
-            provider = OpenRouterDecision(load_settings(args.env_file,args.model_slot))
+        provider = configured_provider()
         count_tokens = None
         if args.tokenizer:
             import tiktoken

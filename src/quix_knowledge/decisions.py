@@ -1,6 +1,12 @@
 """Validate provider responses; errors are unknown, never a negative judgment."""
 import json
 import math
+
+def decision_metadata(result):
+    """Retain score semantics and usage without storing authentication data."""
+    keys = ('probability','probability_status','legal_mass','stability','usage','request_id','thresholds','reason')
+    return {key:result.get(key) for key in keys}
+
 def judge(provider, state, question):
     try:
         result = provider(state, question)
@@ -30,7 +36,7 @@ def assess_topic(db, section_id, topic, provider, proposal_id=None):
             updated = db.execute("UPDATE topic_links SET method=?,status=? WHERE id=? AND section_id=? AND topic=? AND status='proposed'",(method,status,proposal_id,section_id,topic))
             if updated.rowcount != 1:
                 raise ValueError('proposal no longer available')
-        db.execute('INSERT INTO decision_receipts(provider,model,outcome,detail) VALUES (?,?,?,?)',(result.get('provider','unknown'),result.get('model'),result['outcome'],json.dumps({'section_id':section_id,'topic':topic,'reason':result.get('reason'),'probability':result.get('probability'),'usage':result.get('usage'),'request_id':result.get('request_id'),'thresholds':result.get('thresholds')})))
+        db.execute('INSERT INTO decision_receipts(provider,model,outcome,detail) VALUES (?,?,?,?)',(result.get('provider','unknown'),result.get('model'),result['outcome'],json.dumps({'section_id':section_id,'topic':topic,**decision_metadata(result)})))
     return result
 
 
@@ -47,7 +53,8 @@ def assess_role(db, section_id, role, role_version, role_purpose, provider):
     valid = not isinstance(score,bool) and isinstance(score,(int,float)) and math.isfinite(score) and 0 <= score <= 1
     if result['outcome'] != 'unknown' and not valid:
         result = dict(result,outcome='unknown',reason='invalid role-usefulness probability',probability=None)
-    detail = {'section_id':section_id,'source_revision':section['revision'],'question':'role usefulness','role':role,'role_version':role_version,'role_purpose':role_purpose,'probability':score if valid else None,'usage':result.get('usage'),'request_id':result.get('request_id'),'reason':result.get('reason')}
+    detail = {'section_id':section_id,'source_revision':section['revision'],'question':'role usefulness','role':role,'role_version':role_version,'role_purpose':role_purpose,**decision_metadata(result)}
+    detail['probability'] = score if valid else None
     with db:
         db.execute('INSERT INTO decision_receipts(provider,model,outcome,detail) VALUES (?,?,?,?)',(result.get('provider','unknown'),result.get('model'),result['outcome'],json.dumps(detail)))
         if result['outcome'] != 'unknown' and valid:

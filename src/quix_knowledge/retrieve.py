@@ -1,7 +1,7 @@
 """Deterministic lexical retrieval with optional topic and role ranking."""
 import re
 import json
-from .decisions import judge
+from .decisions import judge, decision_metadata
 
 def tokens(text):
     return set(re.findall(r'[\w]+',text.lower()))
@@ -84,7 +84,7 @@ def search(db, query, variant='baseline', role=None, role_version=None, provider
             item['decision'] = judge(provider, {'query':query,'title':item['title'],'text':item['body'][:4000], 'text_truncated':len(item['body']) > 4000}, 'relevant')
             decision = item['decision']
             item['score'] += {'supported':0.1,'unsuitable':-0.1}.get(decision['outcome'],0)
-            db.execute('INSERT INTO decision_receipts(provider,model,outcome,detail) VALUES (?,?,?,?)',(decision.get('provider','unknown'),decision.get('model'),decision['outcome'],json.dumps({'item_id':item['id'],'query':query,'reason':decision.get('reason'),'probability':decision.get('probability'),'usage':decision.get('usage'),'request_id':decision.get('request_id'),'thresholds':decision.get('thresholds')})))
+            db.execute('INSERT INTO decision_receipts(provider,model,outcome,detail) VALUES (?,?,?,?)',(decision.get('provider','unknown'),decision.get('model'),decision['outcome'],json.dumps({'item_id':item['id'],'query':query,**decision_metadata(decision)})))
         outcomes = [item['decision']['outcome'] for item in results]
         if any(outcome in ('unknown','unclear') for outcome in outcomes):
             reason = 'decision_unknown' if 'unknown' in outcomes else 'decision_unclear'

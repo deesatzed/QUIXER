@@ -48,6 +48,20 @@ def test_receipt_keeps_probability_and_usage(tmp_path):
     assert detail['probability'] == 0.7
     assert detail['usage']['cost'] == 0.01
 
+def test_receipt_preserves_local_score_qualifiers(tmp_path):
+    import json
+    db=open_catalog(':memory:')
+    path=tmp_path/'doc.md'
+    path.write_text('# Retry\nRetry after delay.')
+    ingest(db,path)
+    def provider(*args):
+        return {'outcome':'unclear','provider':'jevedge0','probability':0.8,'probability_status':'conditional_option_score_uncalibrated','legal_mass':0.3,'stability':{'stable_across_permutations':False}}
+    search(db,'retry',variant='decision',provider=provider)
+    detail=json.loads(db.execute('SELECT detail FROM decision_receipts').fetchone()[0])
+    assert detail['probability_status'] == 'conditional_option_score_uncalibrated'
+    assert detail['legal_mass'] == 0.3
+    assert detail['stability']['stable_across_permutations'] is False
+
 def test_decision_call_count_respects_candidate_budget(tmp_path):
     db = open_catalog(':memory:')
     path = tmp_path/'doc.md'

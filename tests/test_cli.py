@@ -81,3 +81,10 @@ def test_cli_role_assessment_requires_explicit_model_and_role_purpose(tmp_path):
     result=subprocess.run(cmd,env=env,capture_output=True,text=True)
     assert result.returncode != 0
     assert '--role-purpose' in result.stderr
+
+def test_cli_rejects_mixed_local_and_openrouter_configuration(tmp_path):
+    env=dict(os.environ,PYTHONPATH=str(Path(__file__).resolve().parents[1]/'src'))
+    cmd=[sys.executable,'-m','quix_knowledge','--db',str(tmp_path/'db'),'search','retry','--variant','decision','--env-file','config.env','--model-slot','2','--jev-url','http://127.0.0.1:8090']
+    result=subprocess.run(cmd,env=env,capture_output=True,text=True)
+    assert result.returncode != 0
+    assert 'choose one decision provider' in result.stderr

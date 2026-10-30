@@ -4,7 +4,7 @@ import hashlib
 import re
 import time
 
-from .decisions import assess_topic, judge
+from .decisions import assess_topic, judge, decision_metadata
 from .ingest import ingest
 
 
@@ -59,7 +59,7 @@ def _propose_generated(db, section, provider, decision_budget):
             else:
                 db.execute('INSERT INTO generated_index VALUES (?,?,?,?,?,?,?,?)',(entry_id,section['id'],title,body,start,end,status,'extractive-paragraph-v1'))
             if judgment:
-                db.execute('INSERT INTO decision_receipts(provider,model,outcome,detail) VALUES (?,?,?,?)',(judgment.get('provider','unknown'),judgment.get('model'),judgment['outcome'],json.dumps({'generated_index_id':entry_id,'question':'topic supported','probability':judgment.get('probability'),'usage':judgment.get('usage'),'request_id':judgment.get('request_id'),'thresholds':judgment.get('thresholds'),'reason':judgment.get('reason')})))
+                db.execute('INSERT INTO decision_receipts(provider,model,outcome,detail) VALUES (?,?,?,?)',(judgment.get('provider','unknown'),judgment.get('model'),judgment['outcome'],json.dumps({'generated_index_id':entry_id,'question':'topic supported',**decision_metadata(judgment)})))
         created += not bool(existing) and not restored
     return created, calls
 
@@ -92,7 +92,7 @@ def index_source(db, path, provider=None, max_decisions=10):
         result['structure_judgment'] = judgment
         result['decision_calls'] += 1
         with db:
-            db.execute('INSERT INTO decision_receipts(provider,model,outcome,detail) VALUES (?,?,?,?)', (judgment.get('provider','unknown'), judgment.get('model'), judgment['outcome'], json.dumps({'source_id': source_id, 'question': 'structure usable', 'probability': judgment.get('probability'), 'usage': judgment.get('usage'), 'request_id': judgment.get('request_id'), 'thresholds': judgment.get('thresholds'), 'reason': judgment.get('reason')})))
+            db.execute('INSERT INTO decision_receipts(provider,model,outcome,detail) VALUES (?,?,?,?)', (judgment.get('provider','unknown'), judgment.get('model'), judgment['outcome'], json.dumps({'source_id': source_id, 'question': 'structure usable', **decision_metadata(judgment)})))
     for section in sections:
         if section['generated']:
             created, calls = _propose_generated(db, section, provider, max_decisions-result['decision_calls'])
