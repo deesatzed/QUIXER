@@ -87,15 +87,21 @@ def search(db, query, variant='baseline', role=None, role_version=None, provider
     for i, (item, lexical) in enumerate(zip(candidates,lexical_scores)):
         column = 'record_id' if item['record_type'] == 'agent_record' else 'section_id'
         annotation_id = item['source_section_id'] if item['record_type'] == 'generated_index' else item['id']
-        topics = [r[0] for r in db.execute(f"SELECT topic FROM topic_links WHERE {column}=? AND status='accepted'",(annotation_id,))]
+        allowed_statuses = ('accepted','proposed') if include_proposed and variant != 'baseline' else ('accepted',)
+        condition = '(generated_index_id IS NULL OR generated_index_id=?)' if item['record_type'] == 'generated_index' else 'generated_index_id IS NULL'
+        parameters = (annotation_id,*allowed_statuses,item['id']) if item['record_type'] == 'generated_index' else (annotation_id,*allowed_statuses)
+        query_topics = f"SELECT id,topic,status,method,generated_index_id FROM topic_links WHERE {column}=? AND status IN ({','.join('?'*len(allowed_statuses))}) AND {condition} ORDER BY id"
+        topic_annotations = [dict(r) for r in db.execute(query_topics,parameters)]
+        topics = [r['topic'] for r in topic_annotations]
         if item['record_type'] == 'generated_index':
             topics.append(item['title'])
+            topic_annotations.append({'id':None,'topic':item['title'],'status':item['index_status'],'method':item['method'],'generated_index_id':item['id']})
         topic = len(query_tokens & tokens(' '.join(topics))) if variant != 'baseline' else 0
         broad_text = item['title']+' '+item['body']+(' '+' '.join(topics) if variant != 'baseline' else '')
         broad_score = len(_singular_tokens(query) & _singular_tokens(broad_text))
         if not lexical and not topic and not broad_score and i not in dense_ranks:
             continue
-        item.update(lexical_score=lexical,topic_score=topic,topics=topics,ranking_method=ranking,dense_similarity=dense_scores[i],embedding_metadata=getattr(embedder,'metadata',None) if ranking == 'hybrid' else None,role_score=None,role_score_status=None,role_score_method=None,role_score_model=None,role_score_scope=None,decision=None)
+        item.update(lexical_score=lexical,topic_score=topic,topics=topics,topic_annotations=topic_annotations,ranking_method=ranking,dense_similarity=dense_scores[i],embedding_metadata=getattr(embedder,'metadata',None) if ranking == 'hybrid' else None,role_score=None,role_score_status=None,role_score_method=None,role_score_model=None,role_score_scope=None,decision=None)
         if ranking == 'hybrid':
             item['embedding_issue'] = 'zero_document_vector' if dense_scores[i] is None else None
             item['embedding_zero_vector_count'] = zero_vectors

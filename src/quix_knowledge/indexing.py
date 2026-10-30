@@ -4,8 +4,9 @@ import hashlib
 import re
 import time
 
-from .decisions import assess_topic, judge, decision_metadata
+from .decisions import assess_topic, assess_generated_topic, assess_record_topic, judge, decision_metadata
 from .ingest import ingest
+from .store import validate_retrievable_ids
 
 
 def _finish_index(db, result, before, started):
@@ -89,6 +90,9 @@ def review_generated_entry(db, entry_id, decision, reviewer):
         updated = db.execute("UPDATE generated_index SET status=? WHERE id=? AND status='proposed' AND section_id IN (SELECT sections.id FROM sections JOIN sources ON sources.id=sections.source_id WHERE sources.status='current')",(decision,entry_id))
         if updated.rowcount != 1:
             raise ValueError('entry is not a current proposal')
+        if decision == 'rejected':
+            db.execute("UPDATE topic_links SET status='stale' WHERE generated_index_id=?",(entry_id,))
+            db.execute("UPDATE index_role_annotations SET status='stale' WHERE entry_id=?",(entry_id,))
         db.execute('INSERT INTO generated_index_reviews(entry_id,reviewer,decision) VALUES (?,?,?)',(entry_id,reviewer.strip(),decision))
 
 
@@ -154,4 +158,55 @@ def index_source(db, path, provider=None, max_decisions=10):
         if db.execute("SELECT 1 FROM sources WHERE id=? AND status='current'",(source_id,)).fetchone() is None:
             result['status'] = 'source_changed'
             break
+    return _finish_index(db,result,before,started)
+
+
+def map_topics(db, topics, provider, *, max_decisions, include_proposed=False):
+    """Assess user-supplied topics across source and agent records with a hard call cap."""
+    if provider is None or not callable(provider):
+        raise ValueError('a decision provider is required')
+    if isinstance(max_decisions,bool) or not isinstance(max_decisions,int) or max_decisions < 0:
+        raise ValueError('max_decisions must be a nonnegative integer')
+    if not isinstance(topics,list) or not topics or any(not isinstance(t,str) or not t.strip() for t in topics):
+        raise ValueError('topics must be a nonempty list of strings')
+    topics = [topic.strip() for topic in topics]
+    if len({topic.casefold() for topic in topics}) != len(topics):
+        raise ValueError('topics must be unique ignoring case')
+    validate_retrievable_ids(db)
+    targets = [('section',r[0]) for r in db.execute("SELECT sections.id FROM sections JOIN sources ON sources.id=sections.source_id WHERE sources.status='current' ORDER BY sections.id")]
+    statuses = ('accepted','proposed') if include_proposed else ('accepted',)
+    targets += [('generated_index',r[0]) for r in db.execute("SELECT g.id FROM generated_index g JOIN sections s ON s.id=g.section_id JOIN sources x ON x.id=s.source_id WHERE x.status='current' AND g.status IN (%s) ORDER BY g.id" % ','.join('?'*len(statuses)),statuses)]
+    clean_records = """SELECT r.id FROM records r WHERE r.status IN ('proposed','current') AND NOT EXISTS
+        (SELECT 1 FROM evidence e JOIN sections s ON s.id=e.section_id JOIN sources x ON x.id=s.source_id WHERE e.record_id=r.id AND x.status != 'current') ORDER BY r.id"""
+    targets += [('record',r[0]) for r in db.execute(clean_records)]
+    excluded = db.execute("""SELECT count(*) FROM records r WHERE r.status IN ('proposed','current') AND EXISTS
+        (SELECT 1 FROM evidence e JOIN sections s ON s.id=e.section_id JOIN sources x ON x.id=s.source_id WHERE e.record_id=r.id AND x.status != 'current')""").fetchone()[0]
+    pending = []
+    skipped = 0
+    for kind,target in targets:
+        for topic in topics:
+            if kind == 'section':
+                existing = db.execute("SELECT 1 FROM topic_links WHERE section_id=? AND generated_index_id IS NULL AND topic=? AND status IN ('proposed','accepted','rejected')",(target,topic)).fetchone()
+            elif kind == 'generated_index':
+                existing = db.execute("SELECT 1 FROM topic_links WHERE generated_index_id=? AND topic=? AND status IN ('proposed','accepted','rejected')",(target,topic)).fetchone()
+            else:
+                existing = db.execute("SELECT 1 FROM topic_links WHERE record_id=? AND topic=? AND status IN ('proposed','accepted','rejected')",(target,topic)).fetchone()
+            if existing:
+                skipped += 1
+            else:
+                pending.append((kind,target,topic))
+    started = time.monotonic()
+    before = db.execute('SELECT COALESCE(MAX(id),0) FROM decision_receipts').fetchone()[0]
+    result = {'decision_calls':0,'remaining_pairs':max(0,len(pending)-max_decisions),'skipped_existing':skipped,'excluded_stale_records':excluded,'target_changed':0,'outcomes':[]}
+    functions = {'section':assess_topic,'generated_index':assess_generated_topic,'record':assess_record_topic}
+    for kind,target,topic in pending[:max_decisions]:
+        try:
+            decision = functions[kind](db,target,topic,provider)
+        except ValueError:
+            result['target_changed'] += 1
+            continue
+        result['decision_calls'] += 1
+        result['outcomes'].append({'target_type':kind,'target_id':target,'topic':topic,'outcome':decision['outcome']})
+        if decision.get('reason') in ('source changed during decision','record or evidence changed during decision','index entry or source changed during decision'):
+            result['target_changed'] += 1
     return _finish_index(db,result,before,started)

@@ -56,7 +56,8 @@ def review_topic(db, link_id, decision, reviewer):
             LEFT JOIN sources src ON src.id=s.source_id
             LEFT JOIN records r ON r.id=t.record_id
             WHERE t.id=? AND t.status='proposed' AND
-              ((t.section_id IS NOT NULL AND src.status='current') OR
+              ((t.section_id IS NOT NULL AND src.status='current' AND
+                (t.generated_index_id IS NULL OR EXISTS (SELECT 1 FROM generated_index g WHERE g.id=t.generated_index_id AND g.section_id=t.section_id AND g.status IN ('proposed','accepted')))) OR
                (t.record_id IS NOT NULL AND r.status IN ('proposed','current') AND NOT EXISTS
                  (SELECT 1 FROM evidence e JOIN sections es ON es.id=e.section_id JOIN sources x ON x.id=es.source_id WHERE e.record_id=r.id AND x.status != 'current')))""",(link_id,)).fetchone()
         if current is None:

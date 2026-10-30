@@ -56,6 +56,12 @@ def main():
     record_topic_parser.add_argument('topic')
     record_topic_parser.add_argument('--env-file')
     record_topic_parser.add_argument('--model-slot',type=int,choices=(1,2,3,4))
+    topic_map_parser = sub.add_parser('map-topics')
+    topic_map_parser.add_argument('topics',help='JSON array of topic names')
+    topic_map_parser.add_argument('--max-decisions',type=int,required=True)
+    topic_map_parser.add_argument('--include-proposed',action='store_true')
+    topic_map_parser.add_argument('--env-file')
+    topic_map_parser.add_argument('--model-slot',type=int,choices=(1,2,3,4))
     experiment_parser = sub.add_parser('experiment')
     experiment_parser.add_argument('tasks', help='JSON array of task records')
     exp_budget = experiment_parser.add_mutually_exclusive_group()
@@ -106,12 +112,12 @@ def main():
     for rank_parser in (experiment_parser,search_parser,context_parser):
         rank_parser.add_argument('--jevedge-root',help='trusted JevEdge0 source checkout')
         rank_parser.add_argument('--embedding-model-path',help='existing local embedding checkpoint')
-    for provider_parser in (index_parser, role_parser, record_topic_parser, experiment_parser, search_parser, context_parser):
+    for provider_parser in (index_parser, role_parser, record_topic_parser, topic_map_parser, experiment_parser, search_parser, context_parser):
         provider_parser.add_argument('--jev-url',help='HTTP loopback JevEdge0 workbench origin')
         provider_parser.add_argument('--stability-trials',type=int,default=1)
         provider_parser.add_argument('--thresholds',type=float,nargs=2,metavar=('LOW','HIGH'),help='explicit experimental decision thresholds')
     args = parser.parse_args()
-    if args.command in ('index','assess-role','assess-record-topic','experiment','search','context'):
+    if args.command in ('index','assess-role','assess-record-topic','map-topics','experiment','search','context'):
         if bool(args.env_file) != bool(args.model_slot):
             parser.error('--env-file and --model-slot must be provided together')
         if args.jev_url and args.env_file:
@@ -120,7 +126,7 @@ def main():
             parser.error('thresholds require a decision provider')
         if args.thresholds and not 0 <= args.thresholds[0] < args.thresholds[1] <= 1:
             parser.error('thresholds must satisfy 0 <= LOW < HIGH <= 1')
-        if args.command in ('assess-role','assess-record-topic') and not (args.jev_url or args.env_file):
+        if args.command in ('assess-role','assess-record-topic','map-topics') and not (args.jev_url or args.env_file):
             parser.error(f'{args.command} requires a decision provider')
     if args.command == 'experiment' and bool(args.tokenizer) != (args.context_tokens is not None or args.packet_tokens is not None):
         parser.error('--context-tokens or --packet-tokens and --tokenizer must be provided together')
@@ -176,6 +182,12 @@ def main():
             result = assess_record_topic(db,args.record_id,args.topic,configured_provider())
             print(json.dumps(result))
             return 0 if result['outcome'] != 'unknown' else 1
+        if args.command == 'map-topics':
+            from .indexing import map_topics
+            topics = json.loads(Path(args.topics).read_text(encoding='utf-8'))
+            result = map_topics(db,topics,configured_provider(),max_decisions=args.max_decisions,include_proposed=args.include_proposed)
+            print(json.dumps(result))
+            return 0 if result['target_changed'] == 0 else 1
         if args.command == 'context':
             import tiktoken
             from .context import build_context_packet, serialize_packet

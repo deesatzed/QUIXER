@@ -63,6 +63,26 @@ def assess_record_topic(db, record_id, topic, provider):
         db.execute('INSERT INTO decision_receipts(provider,model,outcome,detail) VALUES (?,?,?,?)',(result.get('provider','unknown'),result.get('model'),result['outcome'],json.dumps({'record_id':record_id,'topic':topic,'question':'topic supported',**decision_metadata(result)})))
     return result
 
+def assess_generated_topic(db, entry_id, topic, provider):
+    """Assess a topic for one generated span without assigning it to its parent."""
+    if not isinstance(topic,str) or not topic.strip():
+        raise ValueError('topic is required')
+    query = """SELECT g.title,g.body,g.section_id FROM generated_index g JOIN sections s ON s.id=g.section_id
+        JOIN sources x ON x.id=s.source_id WHERE g.id=? AND g.status IN ('proposed','accepted') AND x.status='current'"""
+    entry = db.execute(query,(entry_id,)).fetchone()
+    if entry is None:
+        raise ValueError('index entry is not current or proposed')
+    result = judge(provider,{'title':entry['title'],'text':entry['body'][:4000],'text_truncated':len(entry['body'])>4000,'topic':topic},'topic supported')
+    with db:
+        current = db.execute(query,(entry_id,)).fetchone()
+        if current is None or current['title'] != entry['title'] or current['body'] != entry['body'] or current['section_id'] != entry['section_id']:
+            result = dict(result,outcome='unknown',reason='index entry or source changed during decision')
+        else:
+            status = 'rejected' if result['outcome'] == 'unsuitable' else 'proposed'
+            db.execute('INSERT INTO topic_links(section_id,generated_index_id,topic,method,status) VALUES (?,?,?,?,?)',(entry['section_id'],entry_id,topic,'decision',status))
+        db.execute('INSERT INTO decision_receipts(provider,model,outcome,detail) VALUES (?,?,?,?)',(result.get('provider','unknown'),result.get('model'),result['outcome'],json.dumps({'generated_index_id':entry_id,'topic':topic,'question':'topic supported',**decision_metadata(result)})))
+    return result
+
 
 def assess_role(db, section_id, role, role_version, role_purpose, provider):
     """Save a provisional usefulness estimate for a source unit or agent record."""

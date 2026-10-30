@@ -188,3 +188,12 @@ def test_cli_records_agent_proposal_and_named_review(tmp_path):
     assert rows[0]['evidence_status'] == 'unsupported'
     listed=json.loads(subprocess.run([*base,'list-records'],env=env,capture_output=True,text=True,check=True).stdout)
     assert listed[0]['reviews'][0]['reviewer'] == 'reviewer'
+
+def test_cli_topic_mapping_requires_explicit_provider_and_budget(tmp_path):
+    topics=tmp_path/'topics.json'
+    topics.write_text('["resilience"]')
+    env=dict(os.environ,PYTHONPATH=str(Path(__file__).resolve().parents[1]/'src'))
+    cmd=[sys.executable,'-m','quix_knowledge','--db',str(tmp_path/'db'),'map-topics',str(topics),'--max-decisions','1']
+    result=subprocess.run(cmd,env=env,capture_output=True,text=True)
+    assert result.returncode != 0
+    assert 'requires a decision provider' in result.stderr
