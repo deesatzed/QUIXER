@@ -54,6 +54,8 @@ def main():
     experiment_parser.add_argument('--label-provenance')
     experiment_parser.add_argument('--env-file')
     experiment_parser.add_argument('--model-slot', type=int, choices=(1,2,3,4))
+    calibrate_parser = sub.add_parser('calibrate')
+    calibrate_parser.add_argument('spec',help='JSON labeled decisions and candidate thresholds')
     search_parser = sub.add_parser('search')
     search_parser.add_argument('query')
     search_parser.add_argument('--variant', choices=('baseline','topic','decision','role'), default='baseline')
@@ -109,6 +111,12 @@ def main():
                 from .openrouter import load_settings, OpenRouterDecision
                 return OpenRouterDecision(load_settings(args.env_file,args.model_slot),thresholds=args.thresholds)
             return None
+        if args.command == 'calibrate':
+            from .calibration import select_policy
+            spec = json.loads(Path(args.spec).read_text(encoding='utf-8'))
+            result = select_policy(spec['rows'],spec['threshold_pairs'],max_error_rate=spec.get('max_error_rate',0.0),min_actions=spec.get('min_actions',3),label_provenance=spec['label_provenance'])
+            print(json.dumps(result))
+            return 0
         if args.command == 'assess-record-topic':
             from .decisions import assess_record_topic
             result = assess_record_topic(db,args.record_id,args.topic,configured_provider())
