@@ -6,6 +6,16 @@ from .decisions import judge
 def tokens(text):
     return set(re.findall(r'[\w]+',text.lower()))
 
+def _singular_tokens(text):
+    result = set()
+    for token in tokens(text):
+        if len(token) > 4 and token.endswith('ies'):
+            token = token[:-3] + 'y'
+        elif len(token) > 4 and token.endswith('s') and not token.endswith(('ss','us','is')):
+            token = token[:-1]
+        result.add(token)
+    return result
+
 def search(db, query, variant='baseline', role=None, role_version=None, provider=None, limit=10, context_chars=None, include_proposed=False, context_tokens=None, count_tokens=None):
     if variant not in {'baseline','topic','decision','role'}:
         raise ValueError('unknown retrieval variant')
@@ -18,6 +28,7 @@ def search(db, query, variant='baseline', role=None, role_version=None, provider
     query_tokens = tokens(query)
     rows = db.execute("SELECT sections.*,sources.path,sources.revision,sources.status AS source_status,section_pages.page_start,section_pages.page_end FROM sections JOIN sources ON sources.id=sections.source_id LEFT JOIN section_pages ON sections.id=section_pages.section_id WHERE sources.status='current'").fetchall()
     results = []
+    broadened = []
     candidates = [dict(row, record_type='section', evidence=[], unsupported=False) for row in rows]
     warning_pages = {}
     for row in db.execute('SELECT source_id,page FROM extraction_warnings ORDER BY page'):
@@ -46,7 +57,9 @@ def search(db, query, variant='baseline', role=None, role_version=None, provider
         if item['record_type'] == 'generated_index':
             topics.append(item['title'])
         topic = len(query_tokens & tokens(' '.join(topics))) if variant != 'baseline' else 0
-        if not lexical and not topic:
+        broad_text = item['title']+' '+item['body']+(' '+' '.join(topics) if variant != 'baseline' else '')
+        broad_score = len(_singular_tokens(query) & _singular_tokens(broad_text))
+        if not lexical and not topic and not broad_score:
             continue
         item.update(lexical_score=lexical,topic_score=topic,topics=topics,role_score=None,role_score_status=None,role_score_method=None,role_score_model=None,decision=None)
         if variant == 'role' and role and role_version:
@@ -57,7 +70,14 @@ def search(db, query, variant='baseline', role=None, role_version=None, provider
                 item['role_score_method'] = annotation['method']
                 item['role_score_model'] = annotation['model']
         item['score'] = lexical + topic + (0.25 * item['role_score'] if item['role_score'] is not None else 0)
-        results.append(item)
+        if lexical or topic:
+            results.append(item)
+        else:
+            item['score'] += broad_score
+            item['fallback_reason'] = 'lexical_broadened'
+            broadened.append(item)
+    if not results:
+        results = broadened
     results = sorted(results,key=lambda x:(-x['score'],x['id']))[:limit]
     if variant in {'decision','role'} and provider is not None:
         for item in results:
@@ -73,6 +93,8 @@ def search(db, query, variant='baseline', role=None, role_version=None, provider
             results = baseline or results
             for item in results:
                 item['decision'] = decisions.get(item['id'])
+                if item.get('fallback_reason') == 'lexical_broadened':
+                    item['lexical_fallback_reason'] = 'lexical_broadened'
                 item['fallback_reason'] = reason if baseline else reason + '_baseline_empty'
     db.commit()
     results = sorted(results,key=lambda x:(-x['score'],x['id']))

@@ -6,6 +6,10 @@ def judge(provider, state, question):
         result = provider(state, question)
         if not isinstance(result, dict) or result.get('outcome') not in {'supported','unclear','unsuitable'} or not isinstance(result.get('provider'),str):
             return {'outcome':'unknown','provider':'unknown','reason':'invalid response'}
+        usage = result.get('usage')
+        if usage is not None:
+            result = dict(result)
+            result['usage'] = {key:value for key,value in usage.items() if key in ('cost','input_tokens','output_tokens') and isinstance(value,(int,float)) and not isinstance(value,bool) and math.isfinite(value) and value >= 0} if isinstance(usage,dict) else None
         return result
     except Exception as exc:
         return {'outcome':'unknown','provider':'unknown','reason':type(exc).__name__}
@@ -42,7 +46,7 @@ def assess_role(db, section_id, role, role_version, role_purpose, provider):
     score = result.get('probability')
     valid = not isinstance(score,bool) and isinstance(score,(int,float)) and math.isfinite(score) and 0 <= score <= 1
     if result['outcome'] != 'unknown' and not valid:
-        result = dict(result,outcome='unknown',reason='invalid role-usefulness probability')
+        result = dict(result,outcome='unknown',reason='invalid role-usefulness probability',probability=None)
     detail = {'section_id':section_id,'source_revision':section['revision'],'question':'role usefulness','role':role,'role_version':role_version,'role_purpose':role_purpose,'probability':score if valid else None,'usage':result.get('usage'),'request_id':result.get('request_id'),'reason':result.get('reason')}
     with db:
         db.execute('INSERT INTO decision_receipts(provider,model,outcome,detail) VALUES (?,?,?,?)',(result.get('provider','unknown'),result.get('model'),result['outcome'],json.dumps(detail)))

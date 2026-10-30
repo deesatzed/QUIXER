@@ -120,3 +120,32 @@ def test_uncertain_decision_falls_back_to_ungated_baseline(tmp_path):
     results=search(db,'retry failure',variant='decision',provider=fail,limit=1)
     assert results[0]['id'] == rows[0]['id']
     assert results[0]['fallback_reason'] == 'decision_unknown'
+
+def test_no_exact_match_broadens_inflections_and_reports_it(tmp_path):
+    db=open_catalog(':memory:')
+    path=tmp_path/'doc.md'
+    path.write_text('# Checks\nDocument failures and retries.')
+    ingest(db,path)
+    result=search(db,'failure')
+    assert len(result) == 1
+    assert result[0]['fallback_reason'] == 'lexical_broadened'
+    assert 'failures' in result[0]['body']
+    assert search(db,'retry')[0]['fallback_reason'] == 'lexical_broadened'
+
+def test_exact_match_is_not_mixed_with_plural_fallback(tmp_path):
+    db=open_catalog(':memory:')
+    path=tmp_path/'doc.md'
+    path.write_text('# First\nFailure is documented.\n# Second\nFailures are reviewed.')
+    ingest(db,path)
+    rows=search(db,'failure')
+    assert len(rows) == 1
+    assert rows[0]['title'] == 'First'
+
+def test_model_fallback_preserves_lexical_broadening_reason(tmp_path):
+    db=open_catalog(':memory:')
+    path=tmp_path/'doc.md'
+    path.write_text('# Checks\nDocument failures.')
+    ingest(db,path)
+    row=search(db,'failure',variant='decision',provider=lambda *args: {'outcome':'unclear','provider':'fake'})[0]
+    assert row['fallback_reason'] == 'decision_unclear'
+    assert row['lexical_fallback_reason'] == 'lexical_broadened'

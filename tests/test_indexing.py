@@ -63,3 +63,12 @@ def test_indexing_reports_measured_usage_and_unknown_cost(tmp_path):
     result=index_source(db,other,provider=missing_usage,max_decisions=2)
     assert result['reported_cost'] is None
     assert result['input_tokens'] is None
+
+def test_invalid_usage_is_unknown_not_a_measured_cost(tmp_path):
+    db=open_catalog(':memory:')
+    path=tmp_path/'doc.md'
+    path.write_text('# Retry\nRetry after delay.')
+    provider=lambda *args: {'outcome':'unclear','provider':'fixture','usage':{'cost':float('nan'),'input_tokens':-1}}
+    result=index_source(db,path,provider=provider,max_decisions=1)
+    assert result['reported_cost'] is None
+    assert result['input_tokens'] is None
