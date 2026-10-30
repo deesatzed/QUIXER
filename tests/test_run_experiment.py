@@ -136,6 +136,27 @@ def test_generated_labels_are_scored_only_when_variant_can_return_them(tmp_path)
     assert included['variants']['topic']['metrics']['answerable'] == 1
     assert included['variants']['topic']['queries']['q']['unavailable_label_ids'] == []
 
+def test_common_comparison_uses_only_shared_eligible_labeled_tasks(tmp_path):
+    from quix_knowledge.indexing import index_source
+    db=open_catalog(':memory:')
+    path=tmp_path/'doc.txt'
+    path.write_text('Retry helps outages.\n\nAudit tracks failures.')
+    index_source(db,path)
+    section=db.execute('SELECT id FROM sections').fetchone()[0]
+    entry=db.execute('SELECT id FROM generated_index ORDER BY id').fetchone()[0]
+    tasks=[{'id':'shared','query':'retry','labels':[section],'split':'held_out'},
+           {'id':'span','query':'audit','labels':[entry],'split':'held_out'},
+           {'id':'unknown','query':'retry','labels':None,'split':'development'},
+           {'id':'missing','query':'retry','labels':['absent'],'split':'development'}]
+    comparison=run_experiment(db,tasks,include_proposed=True)['common_comparison']
+    assert comparison['eligible_task_ids'] == ['shared']
+    assert comparison['excluded_task_ids'] == ['missing','span','unknown']
+    assert comparison['by_split']['held_out']['task_ids'] == ['shared']
+    assert comparison['by_split']['development']['task_ids'] == []
+    for metrics in comparison['metrics'].values():
+        assert metrics['answerable'] == 1
+    assert all(m['mean_recall'] is None for m in comparison['by_split']['development']['metrics'].values())
+
 def test_experiment_rejects_malformed_labels(tmp_path):
     import pytest
     db=open_catalog(':memory:')

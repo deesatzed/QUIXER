@@ -106,10 +106,19 @@ def run_experiment(db, tasks, *, provider=None, context_chars=4000, context_toke
         variants[variant] = {'metrics':evaluate(labels,results,missing,unavailable), 'metrics_by_split':by_split, 'queries':queries}
     if corpus_fingerprint(db) != fingerprint:
         raise RuntimeError('catalog changed during experiment')
+    eligible = sorted(task['id'] for task in tasks if task.get('labels') is not None and task['id'] not in missing and all(not variant['queries'][task['id']]['unavailable_label_ids'] for variant in variants.values()))
+    def common_metrics(task_ids):
+        return {name:evaluate({key:labels[key] for key in task_ids},{key:variant['queries'][key]['results'] for key in task_ids}) for name,variant in variants.items()}
+    by_split = {}
+    for split in sorted({task.get('split','unassigned') for task in tasks}):
+        split_ids = [task['id'] for task in tasks if task.get('split','unassigned') == split and task['id'] in eligible]
+        split_ids.sort()
+        by_split[split] = {'task_ids':split_ids,'metrics':common_metrics(split_ids)}
+    common_comparison = {'eligible_task_ids':eligible,'excluded_task_ids':sorted(set(ids)-set(eligible)),'metrics':common_metrics(eligible),'by_split':by_split}
     provider_info = None
     if provider is not None:
         provider_info = {'adapter':type(provider).__name__,'configured_model':getattr(getattr(provider,'settings',None),'model',None),'thresholds':getattr(provider,'thresholds',None),'prompt_version':getattr(provider,'prompt_version',None),'stability_trials':getattr(provider,'trials',None)}
-    return {'manifest':{'created_at':datetime.now(timezone.utc).isoformat(), 'corpus_revision':fingerprint, 'tasks':tasks, 'label_provenance':label_provenance, 'provider_configured':provider is not None, 'provider':provider_info, 'limit':limit, 'ranking':ranking, 'embedding':getattr(embedder,'metadata',None), 'context_chars':context_chars, 'context_tokens':context_tokens, 'packet_tokens':packet_tokens, 'tokenizer':tokenizer_name, 'include_proposed':include_proposed, 'indexing':indexing, 'configuration':configuration}, 'variants':variants}
+    return {'manifest':{'created_at':datetime.now(timezone.utc).isoformat(), 'corpus_revision':fingerprint, 'tasks':tasks, 'label_provenance':label_provenance, 'provider_configured':provider is not None, 'provider':provider_info, 'limit':limit, 'ranking':ranking, 'embedding':getattr(embedder,'metadata',None), 'context_chars':context_chars, 'context_tokens':context_tokens, 'packet_tokens':packet_tokens, 'tokenizer':tokenizer_name, 'include_proposed':include_proposed, 'indexing':indexing, 'configuration':configuration}, 'variants':variants, 'common_comparison':common_comparison}
 
 def run_reviewed_experiment(db, reviewed, **kwargs):
     if not isinstance(reviewed,dict) or reviewed.get('schema') != 'quix-reviewed-labels-v1':

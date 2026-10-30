@@ -65,3 +65,5 @@ Cross-document topic continuation: Schema version 7 adds topic links scoped to i
 Verification: All 147 tests passed, including a regression that discards a topic decision if the generated passage title changes during the model call. `git diff --check` passed.
 
 Evaluation eligibility continuation: The experiment now identifies generated-passage labels that a variant cannot return and excludes affected tasks from that variant's metrics, separately from missing sources. Baseline never exposes generated passages; other variants expose proposals only when enabled. Reports identify the unavailable IDs and affected task count; comparisons require a common eligible task set. This corrects evaluation accounting and does not add independent labels or establish retrieval quality.
+
+Common-task comparison continuation: Experiment reports now provide per-variant metrics on the same eligible labeled tasks, including task IDs and split-specific views. This prevents comparing aggregate scores calculated over different task sets; candidate pools may still differ and an empty or tiny set cannot support a quality claim. No independent labels were created.
