@@ -1,6 +1,7 @@
 """Minimal local command-line entry point."""
 import argparse
 import json
+from pathlib import Path
 from .store import open_catalog
 from .ingest import ingest
 from .retrieve import search
@@ -16,6 +17,13 @@ def main():
     index_parser.add_argument('--env-file')
     index_parser.add_argument('--model-slot', type=int, choices=(1,2,3,4))
     index_parser.add_argument('--max-decisions', type=int, default=10)
+    experiment_parser = sub.add_parser('experiment')
+    experiment_parser.add_argument('tasks', help='JSON array of task records')
+    experiment_parser.add_argument('--context-chars', type=int, default=4000)
+    experiment_parser.add_argument('--limit', type=int, default=10)
+    experiment_parser.add_argument('--label-provenance')
+    experiment_parser.add_argument('--env-file')
+    experiment_parser.add_argument('--model-slot', type=int, choices=(1,2,3,4))
     search_parser = sub.add_parser('search')
     search_parser.add_argument('query')
     search_parser.add_argument('--variant', choices=('baseline','topic','decision','role'), default='baseline')
@@ -26,6 +34,8 @@ def main():
     search_parser.add_argument('--model-slot', type=int, choices=(1,2,3,4))
     args = parser.parse_args()
     if args.command == 'index' and bool(args.env_file) != bool(args.model_slot):
+        parser.error('--env-file and --model-slot must be provided together')
+    if args.command == 'experiment' and bool(args.env_file) != bool(args.model_slot):
         parser.error('--env-file and --model-slot must be provided together')
     if args.command == 'search' and bool(args.env_file) != bool(args.model_slot):
         parser.error('--env-file and --model-slot must be provided together')
@@ -46,6 +56,15 @@ def main():
             result = index_source(db,args.path,provider=provider,max_decisions=args.max_decisions)
             print(json.dumps(result))
             return 0 if result['source_id'] else 1
+        if args.command == 'experiment':
+            from .experiment import run_experiment
+            provider = None
+            if args.env_file:
+                from .openrouter import load_settings, OpenRouterDecision
+                provider = OpenRouterDecision(load_settings(args.env_file,args.model_slot))
+            tasks = json.loads(Path(args.tasks).read_text(encoding='utf-8'))
+            print(json.dumps(run_experiment(db,tasks,provider=provider,context_chars=args.context_chars,limit=args.limit,label_provenance=args.label_provenance)))
+            return 0
         provider = None
         if args.env_file:
             from .openrouter import load_settings, OpenRouterDecision

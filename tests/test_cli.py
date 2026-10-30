@@ -28,3 +28,12 @@ def test_cli_index_creates_proposed_topic(tmp_path):
     env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1]/'src'))
     result = subprocess.run([sys.executable,'-m','quix_knowledge','--db',str(tmp_path/'db'),'index',str(path)],env=env,capture_output=True,text=True,check=True)
     assert json.loads(result.stdout)['topic_candidates'] == 1
+
+def test_cli_experiment_emits_manifest_for_unlabeled_task(tmp_path):
+    taskfile = tmp_path/'tasks.json'
+    taskfile.write_text(json.dumps([{'id':'q','query':'retry','role':'reviewer','role_version':'1','labels':None}]))
+    env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1]/'src'))
+    result = subprocess.run([sys.executable,'-m','quix_knowledge','--db',str(tmp_path/'db'),'experiment',str(taskfile),'--context-chars','100'],env=env,capture_output=True,text=True,check=True)
+    report = json.loads(result.stdout)
+    assert report['variants']['baseline']['metrics']['unlabeled'] == 1
+    assert report['manifest']['context_chars'] == 100
