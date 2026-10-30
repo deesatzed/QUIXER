@@ -1,7 +1,7 @@
 """PDF text ingestion with page-granularity anchors; OCR is not performed."""
 import hashlib
 from pathlib import Path
-from .ingest import supersede_path
+from .ingest import supersede_path, record_ingestion_failure
 
 
 def ingest_pdf(db, path):
@@ -18,12 +18,10 @@ def ingest_pdf(db, path):
             pages = [page.get_text() for page in doc]
             toc = doc.get_toc(simple=True)
     except (OSError, ValueError, RuntimeError) as exc:
-        with db:
-            db.execute('INSERT INTO ingestion_failures VALUES (?,?)',(str(path),f'PDF extraction failed: {type(exc).__name__}'))
+        record_ingestion_failure(db,str(path),f'PDF extraction failed: {type(exc).__name__}')
         return None
     if not any(page.strip() for page in pages):
-        with db:
-            db.execute('INSERT INTO ingestion_failures VALUES (?,?)',(str(path),'PDF has no extractable text; OCR not performed'))
+        record_ingestion_failure(db,str(path),'PDF has no extractable text; OCR not performed')
         return None
     revision = hashlib.sha256(raw).hexdigest()
     source_id = hashlib.sha256((str(path)+'\0'+revision).encode()).hexdigest()

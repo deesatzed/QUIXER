@@ -63,9 +63,18 @@ def run_experiment(db, tasks, *, provider=None, context_chars=4000, context_toke
         raise ValueError('task IDs must be nonempty and unique')
     if any(not isinstance(task.get('query'),str) or not task['query'].strip() for task in tasks):
         raise ValueError('each task needs a query')
+    if any(t.get('labels') is not None and (not isinstance(t['labels'],list) or any(not isinstance(x,str) or not x for x in t['labels'])) for t in tasks):
+        raise ValueError('labels must be null or a list of nonempty IDs')
+    if any(t.get('split','unassigned') not in ('train','development','held_out','unassigned') for t in tasks):
+        raise ValueError('task split must be train, development, held_out or unassigned')
     fingerprint = corpus_fingerprint(db)
     indexing = _indexing_receipts(db,indexing_receipt_ids)
     labels = {t['id']:t.get('labels') for t in tasks}
+    available = {row[0] for row in db.execute("SELECT sections.id FROM sections JOIN sources ON sections.source_id=sources.id WHERE sources.status='current'")}
+    available.update(row[0] for row in db.execute("SELECT id FROM records WHERE status IN ('current','proposed')"))
+    available.update(row[0] for row in db.execute("SELECT generated_index.id FROM generated_index JOIN sections ON generated_index.section_id=sections.id JOIN sources ON sections.source_id=sources.id WHERE sources.status='current' AND generated_index.status IN ('accepted','proposed')"))
+    missing = {task['id']:sorted(set(task['labels'])-available) for task in tasks if task.get('labels')}
+    missing = {key:value for key,value in missing.items() if value}
     variants = {}
     for variant in _VARIANTS:
         queries, results = {}, {}
@@ -81,8 +90,12 @@ def run_experiment(db, tasks, *, provider=None, context_chars=4000, context_toke
             costs = [(d.get('usage') or {}).get('cost') for d in details]
             cost = sum(costs) if costs and all(isinstance(x,(int,float)) and not isinstance(x,bool) for x in costs) else None
             results[task['id']] = rows
-            queries[task['id']] = {'elapsed_seconds': elapsed, 'decision_calls':len(receipts), 'decision_failures':sum(r['outcome']=='unknown' for r in receipts), 'reported_cost':cost, 'returned_body_chars':sum(len(r['body']) for r in rows), 'returned_body_tokens':sum(r['context_token_count'] for r in rows) if context_tokens is not None else None, 'receipts':receipts, 'results':rows}
-        variants[variant] = {'metrics':evaluate(labels,results), 'queries':queries}
+            queries[task['id']] = {'elapsed_seconds': elapsed, 'decision_calls':len(receipts), 'decision_failures':sum(r['outcome']=='unknown' for r in receipts), 'reported_cost':cost, 'returned_body_chars':sum(len(r['body']) for r in rows), 'returned_body_tokens':sum(r['context_token_count'] for r in rows) if context_tokens is not None else None, 'missing_label_ids':missing.get(task['id'],[]), 'receipts':receipts, 'results':rows}
+        by_split = {}
+        for split in sorted({task.get('split','unassigned') for task in tasks}):
+            split_ids = {task['id'] for task in tasks if task.get('split','unassigned') == split}
+            by_split[split] = evaluate({key:labels[key] for key in split_ids},{key:results[key] for key in split_ids},set(missing) & split_ids)
+        variants[variant] = {'metrics':evaluate(labels,results,missing), 'metrics_by_split':by_split, 'queries':queries}
     if corpus_fingerprint(db) != fingerprint:
         raise RuntimeError('catalog changed during experiment')
     return {'manifest':{'created_at':datetime.now(timezone.utc).isoformat(), 'corpus_revision':fingerprint, 'tasks':tasks, 'label_provenance':label_provenance, 'provider_configured':provider is not None, 'limit':limit, 'context_chars':context_chars, 'context_tokens':context_tokens, 'tokenizer':tokenizer_name, 'include_proposed':include_proposed, 'indexing':indexing, 'configuration':configuration}, 'variants':variants}

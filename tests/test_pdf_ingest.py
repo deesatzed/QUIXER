@@ -61,3 +61,13 @@ def test_general_ingest_dispatches_pdf(tmp_path):
     source=ingest(db,path)
     assert source is not None
     assert search(db,'backoff')[0]['page_start'] == 2
+
+def test_failed_pdf_refresh_invalidates_previous_revision(tmp_path):
+    path=tmp_path/'document.pdf'
+    make_pdf(path,False)
+    db=open_catalog(':memory:')
+    source=ingest_pdf(db,path)
+    path.write_bytes(b'broken')
+    assert ingest_pdf(db,path) is None
+    assert db.execute('SELECT status FROM sources WHERE id=?',(source,)).fetchone()[0] == 'invalidated'
+    assert search(db,'backoff') == []

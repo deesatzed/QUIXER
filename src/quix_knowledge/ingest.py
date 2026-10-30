@@ -13,6 +13,14 @@ def supersede_path(db, path):
     db.execute("UPDATE role_annotations SET status='stale' WHERE section_id IN (SELECT sections.id FROM sections JOIN sources ON sources.id=sections.source_id WHERE sources.path=? AND sources.status='current')",(path,))
     db.execute("UPDATE sources SET status='superseded' WHERE path=? AND status='current'",(path,))
 
+def record_ingestion_failure(db, path, reason):
+    """Retain old data, but never present it as current after a failed refresh."""
+    with db:
+        current = [row['id'] for row in db.execute("SELECT id FROM sources WHERE path=? AND status='current'",(path,))]
+        supersede_path(db,path)
+        db.executemany("UPDATE sources SET status='invalidated' WHERE id=?",[(source_id,) for source_id in current])
+        db.execute('INSERT INTO ingestion_failures VALUES (?,?)',(path,reason))
+
 def ingest(db, path):
     path = Path(path).resolve()
     if path.suffix.lower() == '.pdf':
@@ -21,12 +29,10 @@ def ingest(db, path):
     try:
         body = path.read_text(encoding='utf-8')
     except (OSError, UnicodeError) as exc:
-        db.execute('INSERT INTO ingestion_failures VALUES (?,?)',(str(path),str(exc)))
-        db.commit()
+        record_ingestion_failure(db,str(path),str(exc))
         return None
     if not body.strip():
-        db.execute('INSERT INTO ingestion_failures VALUES (?,?)',(str(path),'empty text'))
-        db.commit()
+        record_ingestion_failure(db,str(path),'empty text')
         return None
     revision = hashlib.sha256(body.encode()).hexdigest()
     source_id = hashlib.sha256((str(path)+'\0'+revision).encode()).hexdigest()

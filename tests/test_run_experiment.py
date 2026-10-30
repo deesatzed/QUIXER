@@ -78,3 +78,33 @@ def test_experiment_rejects_receipts_for_superseded_source(tmp_path):
     ingest(db,path)
     with pytest.raises(ValueError,match='current source'):
         run_experiment(db,[{'id':'q','query':'retry','labels':None}],indexing_receipt_ids=result['receipt_ids'])
+
+def test_missing_gold_source_is_not_scored_as_retrieval_failure(tmp_path):
+    db=open_catalog(':memory:')
+    path=tmp_path/'doc.md'
+    path.write_text('# Retry\nRetry after delay.')
+    ingest(db,path)
+    report=run_experiment(db,[{'id':'q','query':'retry','labels':['missing-section']}])
+    for variant in report['variants'].values():
+        assert variant['metrics']['missing_source'] == 1
+        assert variant['metrics']['answerable'] == 0
+        assert variant['metrics']['mean_recall'] is None
+        assert variant['queries']['q']['missing_label_ids'] == ['missing-section']
+
+def test_experiment_rejects_malformed_labels(tmp_path):
+    import pytest
+    db=open_catalog(':memory:')
+    with pytest.raises(ValueError,match='labels'):
+        run_experiment(db,[{'id':'q','query':'retry','labels':'section-id'}])
+
+def test_metrics_are_reported_separately_for_development_and_held_out(tmp_path):
+    db=open_catalog(':memory:')
+    path=tmp_path/'doc.md'
+    path.write_text('# Retry\nRetry after delay.')
+    ingest(db,path)
+    sid=db.execute('SELECT id FROM sections').fetchone()[0]
+    tasks=[{'id':'dev','query':'retry','labels':[sid],'split':'development'}, {'id':'test','query':'timeout','labels':[sid],'split':'held_out'}]
+    report=run_experiment(db,tasks)
+    split=report['variants']['baseline']['metrics_by_split']
+    assert split['development']['mean_recall'] == 1
+    assert split['held_out']['mean_recall'] == 0
