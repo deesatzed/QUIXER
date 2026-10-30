@@ -145,3 +145,13 @@ def test_cli_calibrates_development_and_reports_held_out(tmp_path):
     result=json.loads(subprocess.run(cmd,env=env,capture_output=True,text=True,check=True).stdout)
     assert result['selected'] == {'low':0.2,'high':0.8}
     assert result['held_out']['true_negative'] == 1
+
+def test_cli_refresh_reports_changed_source(tmp_path):
+    path=tmp_path/'doc.md'
+    path.write_text('# Retry\nRetry allowed.')
+    env=dict(os.environ,PYTHONPATH=str(Path(__file__).resolve().parents[1]/'src'))
+    base=[sys.executable,'-m','quix_knowledge','--db',str(tmp_path/'db')]
+    subprocess.run([*base,'ingest',str(path)],env=env,capture_output=True,text=True,check=True)
+    path.write_text('# Retry\nRetry prohibited.')
+    result=subprocess.run([*base,'refresh'],env=env,capture_output=True,text=True,check=True)
+    assert json.loads(result.stdout)['updated'] == 1

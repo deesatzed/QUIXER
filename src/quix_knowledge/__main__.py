@@ -12,6 +12,7 @@ def main():
     sub = parser.add_subparsers(dest='command', required=True)
     ingest_parser = sub.add_parser('ingest')
     ingest_parser.add_argument('path')
+    sub.add_parser('refresh',help='reconcile known source files with the catalog')
     index_parser = sub.add_parser('index')
     index_parser.add_argument('path')
     index_parser.add_argument('--env-file')
@@ -127,6 +128,11 @@ def main():
                 return None
             from .hybrid import JevEdgeEmbedder
             return JevEdgeEmbedder(args.jevedge_root,args.embedding_model_path)
+        if args.command == 'refresh':
+            from .refresh import refresh_sources
+            report=refresh_sources(db)
+            print(json.dumps(report))
+            return 0 if report['failed'] == 0 else 1
         if args.command == 'calibrate':
             from .calibration import select_policy
             spec = json.loads(Path(args.spec).read_text(encoding='utf-8'))
