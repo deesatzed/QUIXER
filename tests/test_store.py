@@ -25,12 +25,25 @@ def test_version_one_catalog_migrates_without_losing_sources(tmp_path):
     db.execute('DROP TABLE generated_index_reviews')
     db.execute('DROP TABLE index_role_annotations')
     db.execute('DROP TABLE topic_link_reviews')
+    db.execute('DROP TABLE record_reviews')
     db.execute('DROP TABLE generated_index')
     db.execute('PRAGMA user_version=1')
     db.commit()
     db.close()
     reopened = open_catalog(path)
-    assert reopened.execute('PRAGMA user_version').fetchone()[0] == 5
+    assert reopened.execute('PRAGMA user_version').fetchone()[0] == 6
     assert reopened.execute("SELECT body FROM sources WHERE id='old'").fetchone()[0] == 'body'
     assert reopened.execute('SELECT count(*) FROM section_pages').fetchone()[0] == 0
     assert reopened.execute('SELECT count(*) FROM generated_index').fetchone()[0] == 0
+
+def test_empty_review_table_preserves_existing_catalog_fingerprint():
+    import hashlib,json
+    from quix_knowledge.store import corpus_fingerprint
+    db=open_catalog(':memory:')
+    tables=('sources','sections','section_pages','extraction_warnings','generated_index','generated_index_reviews','index_role_annotations','records','evidence','topic_links','topic_link_reviews','role_annotations')
+    digest=hashlib.sha256()
+    for name in tables:
+        rows=[dict(row) for row in db.execute(f'SELECT * FROM {name}')]
+        encoded=sorted(json.dumps(row,sort_keys=True,ensure_ascii=False) for row in rows)
+        digest.update(json.dumps([name,encoded],ensure_ascii=False).encode())
+    assert corpus_fingerprint(db) == digest.hexdigest()

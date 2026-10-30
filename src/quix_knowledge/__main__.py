@@ -30,6 +30,20 @@ def main():
     review_topic_parser.add_argument('link_id',type=int)
     review_topic_parser.add_argument('decision',choices=('accepted','rejected'))
     review_topic_parser.add_argument('--reviewer',required=True)
+    add_record_parser = sub.add_parser('add-record')
+    add_record_parser.add_argument('record_id')
+    add_record_parser.add_argument('kind',choices=('finding','decision','test_result'))
+    add_record_parser.add_argument('--body-file',required=True)
+    add_record_parser.add_argument('--producer',required=True)
+    add_record_parser.add_argument('--evidence',action='append',default=[])
+    add_record_parser.add_argument('--output-ref')
+    add_record_parser.add_argument('--supersedes')
+    review_record_parser = sub.add_parser('review-record')
+    review_record_parser.add_argument('record_id')
+    review_record_parser.add_argument('decision',choices=('accepted','rejected'))
+    review_record_parser.add_argument('--reviewer',required=True)
+    list_records_parser = sub.add_parser('list-records')
+    list_records_parser.add_argument('--status',choices=('proposed','current','superseded','invalidated'))
     role_parser = sub.add_parser('assess-role')
     role_parser.add_argument('section_id')
     role_parser.add_argument('--role',required=True)
@@ -188,6 +202,31 @@ def main():
             from .records import review_topic
             review_topic(db,args.link_id,args.decision,args.reviewer)
             print(json.dumps({'link_id':args.link_id,'decision':args.decision,'reviewer':args.reviewer}))
+            return 0
+        if args.command == 'add-record':
+            from .records import add_record
+            body = Path(args.body_file).read_text(encoding='utf-8')
+            add_record(db,args.record_id,args.kind,body,args.producer,evidence=args.evidence,output_ref=args.output_ref,supersedes=args.supersedes)
+            print(json.dumps({'record_id':args.record_id,'status':'proposed'}))
+            return 0
+        if args.command == 'review-record':
+            from .records import review_record
+            review_record(db,args.record_id,args.decision,args.reviewer)
+            print(json.dumps({'record_id':args.record_id,'decision':args.decision,'reviewer':args.reviewer}))
+            return 0
+        if args.command == 'list-records':
+            query = 'SELECT * FROM records'
+            params = ()
+            if args.status:
+                query += ' WHERE status=?'
+                params = (args.status,)
+            records = []
+            for row in db.execute(query+' ORDER BY id',params):
+                item=dict(row)
+                item['evidence']=[r[0] for r in db.execute('SELECT section_id FROM evidence WHERE record_id=? ORDER BY section_id',(item['id'],))]
+                item['reviews']=[dict(r) for r in db.execute('SELECT reviewer,decision,reviewed_at FROM record_reviews WHERE record_id=? ORDER BY id',(item['id'],))]
+                records.append(item)
+            print(json.dumps(records))
             return 0
         if args.command == 'assess-role':
             from .decisions import assess_role

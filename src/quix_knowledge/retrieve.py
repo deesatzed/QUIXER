@@ -56,7 +56,7 @@ def search(db, query, variant='baseline', role=None, role_version=None, provider
         refs = db.execute('SELECT evidence.section_id,sources.status FROM evidence JOIN sections ON sections.id=evidence.section_id JOIN sources ON sources.id=sections.source_id WHERE evidence.record_id=? ORDER BY evidence.section_id',(item['id'],)).fetchall()
         evidence = [r[0] for r in refs]
         evidence_status = 'unsupported' if not refs else 'stale' if any(r[1] != 'current' for r in refs) else 'current'
-        item.update(record_type='agent_record',title=item['kind'],path=None,revision=None,source_status=item['status'],evidence=evidence,unsupported=not evidence,evidence_status=evidence_status)
+        item.update(record_type='agent_record',title=item['kind'],path=None,revision=None,source_status=item['status'],evidence=evidence,unsupported=not evidence,evidence_status=evidence_status,output_ref_status='unverified' if item['output_ref'] else None)
         candidates.append(item)
     dense_scores = [None] * len(candidates)
     if ranking in ('bm25','hybrid'):

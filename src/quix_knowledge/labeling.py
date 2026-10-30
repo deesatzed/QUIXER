@@ -26,10 +26,11 @@ def _candidates(db, include_proposed):
         FROM generated_index g JOIN sections s ON s.id=g.section_id JOIN sources src ON src.id=s.source_id
         LEFT JOIN section_pages p ON p.section_id=s.id WHERE src.status='current' AND g.status IN (%s) ORDER BY g.id""" % ','.join('?'*len(statuses)),statuses).fetchall()
     candidates.extend(dict(row) for row in rows)
-    for row in db.execute("SELECT id,kind AS title,body,status FROM records WHERE status IN ('current','proposed') ORDER BY id"):
+    for row in db.execute("SELECT id,kind AS title,body,status,producer,output_ref FROM records WHERE status IN ('current','proposed') ORDER BY id"):
         item = dict(row)
         refs = db.execute('SELECT e.section_id,src.status FROM evidence e JOIN sections s ON s.id=e.section_id JOIN sources src ON src.id=s.source_id WHERE e.record_id=? ORDER BY e.section_id',(item['id'],)).fetchall()
         item['record_type'] = 'agent_record'
+        item['output_ref_status'] = 'unverified' if item['output_ref'] else None
         item['evidence'] = [ref['section_id'] for ref in refs]
         item['evidence_status'] = 'unsupported' if not refs else 'stale' if any(ref['status'] != 'current' for ref in refs) else 'current'
         candidates.append(item)

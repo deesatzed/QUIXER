@@ -174,3 +174,17 @@ def test_cli_refresh_reports_changed_source(tmp_path):
     path.write_text('# Retry\nRetry prohibited.')
     result=subprocess.run([*base,'refresh'],env=env,capture_output=True,text=True,check=True)
     assert json.loads(result.stdout)['updated'] == 1
+
+def test_cli_records_agent_proposal_and_named_review(tmp_path):
+    env=dict(os.environ,PYTHONPATH=str(Path(__file__).resolve().parents[1]/'src'))
+    base=[sys.executable,'-m','quix_knowledge','--db',str(tmp_path/'db')]
+    body=tmp_path/'finding.txt'
+    body.write_text('Retry requires review.')
+    created=json.loads(subprocess.run([*base,'add-record','finding-1','finding','--body-file',str(body),'--producer','agent'],env=env,capture_output=True,text=True,check=True).stdout)
+    assert created['status'] == 'proposed'
+    subprocess.run([*base,'review-record','finding-1','accepted','--reviewer','reviewer'],env=env,capture_output=True,text=True,check=True)
+    rows=json.loads(subprocess.run([*base,'search','retry'],env=env,capture_output=True,text=True,check=True).stdout)
+    assert rows[0]['source_status'] == 'current'
+    assert rows[0]['evidence_status'] == 'unsupported'
+    listed=json.loads(subprocess.run([*base,'list-records'],env=env,capture_output=True,text=True,check=True).stdout)
+    assert listed[0]['reviews'][0]['reviewer'] == 'reviewer'
