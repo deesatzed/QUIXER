@@ -73,8 +73,11 @@ def run_experiment(db, tasks, *, provider=None, context_chars=4000, context_toke
     available.update(row[0] for row in db.execute("SELECT generated_index.id FROM generated_index JOIN sections ON generated_index.section_id=sections.id JOIN sources ON sections.source_id=sources.id WHERE sources.status='current' AND generated_index.status IN ('accepted','proposed')"))
     missing = {task['id']:sorted(set(task['labels'])-available) for task in tasks if task.get('labels')}
     missing = {key:value for key,value in missing.items() if value}
+    generated = {row['id']:row['status'] for row in db.execute("SELECT generated_index.id,generated_index.status FROM generated_index JOIN sections ON generated_index.section_id=sections.id JOIN sources ON sections.source_id=sources.id WHERE sources.status='current' AND generated_index.status IN ('accepted','proposed')")}
     variants = {}
     for variant in _VARIANTS:
+        unavailable = {task['id']:sorted(label for label in set(task['labels']) if label in generated and (variant == 'baseline' or (generated[label] == 'proposed' and not include_proposed))) for task in tasks if task.get('labels')}
+        unavailable = {key:value for key,value in unavailable.items() if value}
         queries, results = {}, {}
         for task in tasks:
             if corpus_fingerprint(db) != fingerprint:
@@ -95,12 +98,12 @@ def run_experiment(db, tasks, *, provider=None, context_chars=4000, context_toke
             costs = [(d.get('usage') or {}).get('cost') for d in details]
             cost = sum(costs) if costs and all(isinstance(x,(int,float)) and not isinstance(x,bool) for x in costs) else None
             results[task['id']] = rows
-            queries[task['id']] = {'elapsed_seconds': elapsed, 'decision_calls':len(receipts), 'decision_failures':sum(r['outcome']=='unknown' for r in receipts), 'reported_cost':cost, 'returned_body_chars':sum(len(r['body']) for r in rows), 'returned_body_tokens':sum(count_tokens(r['body']) for r in rows) if context_tokens is not None or packet_tokens is not None else None, 'packet_token_count':packet_count,'context_packet':packet, 'missing_label_ids':missing.get(task['id'],[]), 'receipts':receipts, 'results':rows}
+            queries[task['id']] = {'elapsed_seconds': elapsed, 'decision_calls':len(receipts), 'decision_failures':sum(r['outcome']=='unknown' for r in receipts), 'reported_cost':cost, 'returned_body_chars':sum(len(r['body']) for r in rows), 'returned_body_tokens':sum(count_tokens(r['body']) for r in rows) if context_tokens is not None or packet_tokens is not None else None, 'packet_token_count':packet_count,'context_packet':packet, 'missing_label_ids':missing.get(task['id'],[]), 'unavailable_label_ids':unavailable.get(task['id'],[]), 'receipts':receipts, 'results':rows}
         by_split = {}
         for split in sorted({task.get('split','unassigned') for task in tasks}):
             split_ids = {task['id'] for task in tasks if task.get('split','unassigned') == split}
-            by_split[split] = evaluate({key:labels[key] for key in split_ids},{key:results[key] for key in split_ids},set(missing) & split_ids)
-        variants[variant] = {'metrics':evaluate(labels,results,missing), 'metrics_by_split':by_split, 'queries':queries}
+            by_split[split] = evaluate({key:labels[key] for key in split_ids},{key:results[key] for key in split_ids},set(missing) & split_ids,set(unavailable) & split_ids)
+        variants[variant] = {'metrics':evaluate(labels,results,missing,unavailable), 'metrics_by_split':by_split, 'queries':queries}
     if corpus_fingerprint(db) != fingerprint:
         raise RuntimeError('catalog changed during experiment')
     provider_info = None

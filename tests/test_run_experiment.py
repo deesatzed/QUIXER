@@ -117,6 +117,25 @@ def test_missing_gold_source_is_not_scored_as_retrieval_failure(tmp_path):
         assert variant['metrics']['mean_recall'] is None
         assert variant['queries']['q']['missing_label_ids'] == ['missing-section']
 
+def test_generated_labels_are_scored_only_when_variant_can_return_them(tmp_path):
+    from quix_knowledge.indexing import index_source
+    db=open_catalog(':memory:')
+    path=tmp_path/'doc.txt'
+    path.write_text('Retry helps outages.\n\nAudit tracks failures.')
+    index_source(db,path)
+    entry=db.execute('SELECT id FROM generated_index ORDER BY id').fetchone()[0]
+    task=[{'id':'q','query':'retry','labels':[entry]}]
+    excluded=run_experiment(db,task)
+    for variant in excluded['variants'].values():
+        assert variant['metrics']['unavailable_labels'] == 1
+        assert variant['metrics']['missing_source'] == 0
+        assert variant['metrics']['mean_recall'] is None
+        assert variant['queries']['q']['unavailable_label_ids'] == [entry]
+    included=run_experiment(db,task,include_proposed=True)
+    assert included['variants']['baseline']['metrics']['unavailable_labels'] == 1
+    assert included['variants']['topic']['metrics']['answerable'] == 1
+    assert included['variants']['topic']['queries']['q']['unavailable_label_ids'] == []
+
 def test_experiment_rejects_malformed_labels(tmp_path):
     import pytest
     db=open_catalog(':memory:')
