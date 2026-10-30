@@ -70,6 +70,7 @@ def main():
     exp_budget.add_argument('--packet-tokens', type=int)
     experiment_parser.add_argument('--tokenizer')
     experiment_parser.add_argument('--include-proposed', action='store_true')
+    experiment_parser.add_argument('--matched-candidates',action='store_true',help='compare variants using sections and agent records only')
     experiment_parser.add_argument('--indexing-receipts', help='JSON array of indexing receipt IDs from this catalog')
     experiment_parser.add_argument('--limit', type=int, default=10)
     experiment_parser.add_argument('--ranking',choices=('overlap','bm25','hybrid'),default='overlap')
@@ -280,7 +281,7 @@ def main():
                 encoding = tiktoken.get_encoding(args.tokenizer)
                 count_tokens = lambda text: len(encoding.encode_ordinary(text))
             context_chars = args.context_chars if args.context_chars is not None else (None if args.context_tokens is not None or args.packet_tokens is not None else 4000)
-            options = dict(provider=provider,context_chars=context_chars,context_tokens=args.context_tokens,packet_tokens=args.packet_tokens,count_tokens=count_tokens,tokenizer_name=args.tokenizer,limit=args.limit,indexing_receipt_ids=indexing_receipts,ranking=args.ranking,embedder=configured_embedder())
+            options = dict(provider=provider,context_chars=context_chars,context_tokens=args.context_tokens,packet_tokens=args.packet_tokens,count_tokens=count_tokens,tokenizer_name=args.tokenizer,limit=args.limit,indexing_receipt_ids=indexing_receipts,ranking=args.ranking,embedder=configured_embedder(),matched_candidates=args.matched_candidates)
             if args.reviewed:
                 result = run_reviewed_experiment(db,tasks,**options)
             else:

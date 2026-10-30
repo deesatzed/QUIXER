@@ -157,6 +157,19 @@ def test_common_comparison_uses_only_shared_eligible_labeled_tasks(tmp_path):
         assert metrics['answerable'] == 1
     assert all(m['mean_recall'] is None for m in comparison['by_split']['development']['metrics'].values())
 
+def test_matched_candidates_excludes_passages_from_every_variant(tmp_path):
+    from quix_knowledge.indexing import index_source
+    db=open_catalog(':memory:')
+    path=tmp_path/'doc.txt'
+    path.write_text('Retry helps outages.\n\nRetry tracks failures.')
+    index_source(db,path)
+    entry=db.execute('SELECT id FROM generated_index LIMIT 1').fetchone()[0]
+    report=run_experiment(db,[{'id':'q','query':'retry','labels':[entry]}],include_proposed=True,matched_candidates=True)
+    assert report['manifest']['candidate_scope'] == 'sections_and_records'
+    for variant in report['variants'].values():
+        assert variant['queries']['q']['unavailable_label_ids'] == [entry]
+        assert all(row['record_type'] != 'generated_index' for row in variant['queries']['q']['results'])
+
 def test_experiment_rejects_malformed_labels(tmp_path):
     import pytest
     db=open_catalog(':memory:')

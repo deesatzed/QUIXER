@@ -17,7 +17,7 @@ def _singular_tokens(text):
         result.add(token)
     return result
 
-def search(db, query, variant='baseline', role=None, role_version=None, provider=None, limit=10, context_chars=None, include_proposed=False, context_tokens=None, count_tokens=None, ranking='overlap', embedder=None):
+def search(db, query, variant='baseline', role=None, role_version=None, provider=None, limit=10, context_chars=None, include_proposed=False, context_tokens=None, count_tokens=None, ranking='overlap', embedder=None, include_generated=True):
     validate_retrievable_ids(db)
     if variant not in {'baseline','topic','decision','role'}:
         raise ValueError('unknown retrieval variant')
@@ -44,7 +44,7 @@ def search(db, query, variant='baseline', role=None, role_version=None, provider
         warning_pages.setdefault(row['source_id'],[]).append(row['page'])
     for item in candidates:
         item['source_warning_pages'] = warning_pages.get(item['source_id'],[])
-    if variant != 'baseline':
+    if variant != 'baseline' and include_generated:
         statuses = ('accepted','proposed') if include_proposed else ('accepted',)
         entries = db.execute("SELECT g.*,s.source_id,s.start_line,s.end_line,s.generated,src.path,src.revision,src.status AS source_status,p.page_start,p.page_end FROM generated_index g JOIN sections s ON s.id=g.section_id JOIN sources src ON src.id=s.source_id LEFT JOIN section_pages p ON p.section_id=s.id WHERE src.status='current' AND g.status IN (%s)" % ','.join('?'*len(statuses)), statuses).fetchall()
         for entry in entries:
@@ -70,7 +70,7 @@ def search(db, query, variant='baseline', role=None, role_version=None, provider
             from .hybrid import similarities
             dense_scores = similarities(embedder,query[:4000],[item['title'][:512]+'\n'+item['body'][:8000] for item in candidates])
         except Exception as exc:
-            fallback = search(db,query,variant=variant,role=role,role_version=role_version,provider=provider,limit=limit,context_chars=context_chars,include_proposed=include_proposed,context_tokens=context_tokens,count_tokens=count_tokens,ranking='bm25')
+            fallback = search(db,query,variant=variant,role=role,role_version=role_version,provider=provider,limit=limit,context_chars=context_chars,include_proposed=include_proposed,context_tokens=context_tokens,count_tokens=count_tokens,ranking='bm25',include_generated=include_generated)
             if not fallback:
                 raise RuntimeError('embedding unavailable and lexical fallback returned no results') from exc
             for item in fallback:

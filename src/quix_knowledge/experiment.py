@@ -43,7 +43,7 @@ def _indexing_receipts(db, receipt_ids):
     return {'decision_calls':len(receipts),'unknown_decisions':sum(r['outcome']=='unknown' for r in receipts),'reported_cost':total('cost'),'input_tokens':total('input_tokens'),'receipts':receipts}
 
 
-def run_experiment(db, tasks, *, provider=None, context_chars=4000, context_tokens=None, packet_tokens=None, count_tokens=None, tokenizer_name=None, limit=10, label_provenance=None, configuration=None, include_proposed=False, indexing_receipt_ids=None, ranking='overlap', embedder=None):
+def run_experiment(db, tasks, *, provider=None, context_chars=4000, context_tokens=None, packet_tokens=None, count_tokens=None, tokenizer_name=None, limit=10, label_provenance=None, configuration=None, include_proposed=False, indexing_receipt_ids=None, ranking='overlap', embedder=None, matched_candidates=False):
     if not tasks or limit < 0 or (context_chars is not None and context_chars < 0):
         raise ValueError('tasks and nonnegative budgets are required')
     if context_tokens is not None and (context_chars is not None or context_tokens < 0 or count_tokens is None or not tokenizer_name):
@@ -76,7 +76,7 @@ def run_experiment(db, tasks, *, provider=None, context_chars=4000, context_toke
     generated = {row['id']:row['status'] for row in db.execute("SELECT generated_index.id,generated_index.status FROM generated_index JOIN sections ON generated_index.section_id=sections.id JOIN sources ON sections.source_id=sources.id WHERE sources.status='current' AND generated_index.status IN ('accepted','proposed')")}
     variants = {}
     for variant in _VARIANTS:
-        unavailable = {task['id']:sorted(label for label in set(task['labels']) if label in generated and (variant == 'baseline' or (generated[label] == 'proposed' and not include_proposed))) for task in tasks if task.get('labels')}
+        unavailable = {task['id']:sorted(label for label in set(task['labels']) if label in generated and (matched_candidates or variant == 'baseline' or (generated[label] == 'proposed' and not include_proposed))) for task in tasks if task.get('labels')}
         unavailable = {key:value for key,value in unavailable.items() if value}
         queries, results = {}, {}
         for task in tasks:
@@ -84,7 +84,7 @@ def run_experiment(db, tasks, *, provider=None, context_chars=4000, context_toke
                 raise RuntimeError('catalog changed during experiment')
             previous = db.execute('SELECT COALESCE(MAX(id),0) FROM decision_receipts').fetchone()[0]
             started = time.monotonic()
-            rows = search(db, task['query'], variant=variant, role=task.get('role'), role_version=task.get('role_version'), provider=provider, limit=limit, context_chars=context_chars, context_tokens=context_tokens,count_tokens=count_tokens,include_proposed=include_proposed,ranking=ranking,embedder=embedder)
+            rows = search(db, task['query'], variant=variant, role=task.get('role'), role_version=task.get('role_version'), provider=provider, limit=limit, context_chars=context_chars, context_tokens=context_tokens,count_tokens=count_tokens,include_proposed=include_proposed,ranking=ranking,embedder=embedder,include_generated=not matched_candidates)
             packet = None
             packet_count = None
             if packet_tokens is not None:
@@ -118,7 +118,7 @@ def run_experiment(db, tasks, *, provider=None, context_chars=4000, context_toke
     provider_info = None
     if provider is not None:
         provider_info = {'adapter':type(provider).__name__,'configured_model':getattr(getattr(provider,'settings',None),'model',None),'thresholds':getattr(provider,'thresholds',None),'prompt_version':getattr(provider,'prompt_version',None),'stability_trials':getattr(provider,'trials',None)}
-    return {'manifest':{'created_at':datetime.now(timezone.utc).isoformat(), 'corpus_revision':fingerprint, 'tasks':tasks, 'label_provenance':label_provenance, 'provider_configured':provider is not None, 'provider':provider_info, 'limit':limit, 'ranking':ranking, 'embedding':getattr(embedder,'metadata',None), 'context_chars':context_chars, 'context_tokens':context_tokens, 'packet_tokens':packet_tokens, 'tokenizer':tokenizer_name, 'include_proposed':include_proposed, 'indexing':indexing, 'configuration':configuration}, 'variants':variants, 'common_comparison':common_comparison}
+    return {'manifest':{'created_at':datetime.now(timezone.utc).isoformat(), 'corpus_revision':fingerprint, 'tasks':tasks, 'label_provenance':label_provenance, 'provider_configured':provider is not None, 'provider':provider_info, 'limit':limit, 'ranking':ranking, 'embedding':getattr(embedder,'metadata',None), 'context_chars':context_chars, 'context_tokens':context_tokens, 'packet_tokens':packet_tokens, 'tokenizer':tokenizer_name, 'include_proposed':include_proposed, 'candidate_scope':'sections_and_records' if matched_candidates else 'variant_specific', 'indexing':indexing, 'configuration':configuration}, 'variants':variants, 'common_comparison':common_comparison}
 
 def run_reviewed_experiment(db, reviewed, **kwargs):
     if not isinstance(reviewed,dict) or reviewed.get('schema') != 'quix-reviewed-labels-v1':
