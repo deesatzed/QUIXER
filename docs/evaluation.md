@@ -36,4 +36,8 @@ The [unlabeled project smoke run](../reports/2026-10-30-unlabeled-project-smoke.
 
 An [unlabeled BM25 smoke](../reports/2026-10-30-bm25-unlabeled-smoke.json) runs the same five draft tasks and 400-token context-packet budget using both overlap and BM25 rankers. One baseline top result changed; without reviewed labels this is a difference in ordering, not evidence that either ranker is better. Candidate-ID metrics cannot by themselves establish that a truncated packet contains the needed passage.
 
+The optional `hybrid` ranker uses the local JevEdge0 embedding implementation with an explicitly supplied local model, combined with BM25 by reciprocal-rank fusion. [One unlabeled local integration check](../reports/2026-10-30-hybrid-local-smoke.json) confirms the encoder/search path with a real checkpoint; it does not measure quality. Compare it against BM25 on the same independently reviewed tasks and packet budget before making a relative-quality claim. Encoder tokenizer truncation, model load time, repeated embedding computation and local hardware costs must be recorded separately.
+
+A [five-task unlabeled comparison](../reports/2026-10-30-hybrid-unlabeled-comparison.json) uses the actual local encoder and the same 400-token packet budget for BM25 and hybrid. All five baseline top IDs changed; the record contains no relevance labels and does not establish which ordering is better. It does not measure local hardware energy or cost.
+
 If running agents on these tasks, preserve their actual outputs and have an independent reviewer assess the outcomes separately from retrieval. Do not call synthetic tests or model responses evidence of improved swarm performance.

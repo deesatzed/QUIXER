@@ -129,6 +129,13 @@ def test_cli_refuses_thresholds_without_provider(tmp_path):
     assert result.returncode != 0
     assert 'thresholds require a decision provider' in result.stderr
 
+def test_cli_hybrid_requires_explicit_local_encoder_paths(tmp_path):
+    env=dict(os.environ,PYTHONPATH=str(Path(__file__).resolve().parents[1]/'src'))
+    cmd=[sys.executable,'-m','quix_knowledge','--db',str(tmp_path/'db'),'search','retry','--ranking','hybrid']
+    result=subprocess.run(cmd,env=env,capture_output=True,text=True)
+    assert result.returncode != 0
+    assert '--jevedge-root and --embedding-model-path' in result.stderr
+
 def test_cli_calibrates_development_and_reports_held_out(tmp_path):
     spec={'rows':[{'id':'d','split':'development','probability':0.9,'label':True,'model':'m','prompt_version':'p','question':'relevance'},{'id':'h','split':'held_out','probability':0.1,'label':False,'model':'m','prompt_version':'p','question':'relevance'}],'threshold_pairs':[[0.2,0.8]],'min_actions':1,'label_provenance':'synthetic fixture'}
     path=tmp_path/'calibration.json'

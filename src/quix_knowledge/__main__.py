@@ -51,7 +51,7 @@ def main():
     experiment_parser.add_argument('--include-proposed', action='store_true')
     experiment_parser.add_argument('--indexing-receipts', help='JSON array of indexing receipt IDs from this catalog')
     experiment_parser.add_argument('--limit', type=int, default=10)
-    experiment_parser.add_argument('--ranking',choices=('overlap','bm25'),default='overlap')
+    experiment_parser.add_argument('--ranking',choices=('overlap','bm25','hybrid'),default='overlap')
     experiment_parser.add_argument('--label-provenance')
     experiment_parser.add_argument('--env-file')
     experiment_parser.add_argument('--model-slot', type=int, choices=(1,2,3,4))
@@ -60,7 +60,7 @@ def main():
     search_parser = sub.add_parser('search')
     search_parser.add_argument('query')
     search_parser.add_argument('--variant', choices=('baseline','topic','decision','role'), default='baseline')
-    search_parser.add_argument('--ranking',choices=('overlap','bm25'),default='overlap')
+    search_parser.add_argument('--ranking',choices=('overlap','bm25','hybrid'),default='overlap')
     search_parser.add_argument('--role')
     search_parser.add_argument('--role-version')
     budget = search_parser.add_mutually_exclusive_group()
@@ -77,11 +77,14 @@ def main():
     context_parser.add_argument('--budget',type=int,required=True)
     context_parser.add_argument('--tokenizer',required=True)
     context_parser.add_argument('--variant',choices=('baseline','topic','decision','role'),default='role')
-    context_parser.add_argument('--ranking',choices=('overlap','bm25'),default='overlap')
+    context_parser.add_argument('--ranking',choices=('overlap','bm25','hybrid'),default='overlap')
     context_parser.add_argument('--limit',type=int,default=10)
     context_parser.add_argument('--include-proposed',action='store_true')
     context_parser.add_argument('--env-file')
     context_parser.add_argument('--model-slot',type=int,choices=(1,2,3,4))
+    for rank_parser in (experiment_parser,search_parser,context_parser):
+        rank_parser.add_argument('--jevedge-root',help='trusted JevEdge0 source checkout')
+        rank_parser.add_argument('--embedding-model-path',help='existing local embedding checkpoint')
     for provider_parser in (index_parser, role_parser, record_topic_parser, experiment_parser, search_parser, context_parser):
         provider_parser.add_argument('--jev-url',help='HTTP loopback JevEdge0 workbench origin')
         provider_parser.add_argument('--stability-trials',type=int,default=1)
@@ -104,6 +107,11 @@ def main():
         parser.error('a model requires the decision or role variant')
     if args.command == 'search' and bool(args.tokenizer) != (args.context_tokens is not None):
         parser.error('--context-tokens and --tokenizer must be provided together')
+    if args.command in ('search','context','experiment'):
+        if args.ranking == 'hybrid' and not (args.jevedge_root and args.embedding_model_path):
+            parser.error('hybrid ranking requires --jevedge-root and --embedding-model-path')
+        if args.ranking != 'hybrid' and (args.jevedge_root or args.embedding_model_path):
+            parser.error('embedding paths require hybrid ranking')
     db = open_catalog(args.db)
     try:
         def configured_provider():
@@ -114,6 +122,11 @@ def main():
                 from .openrouter import load_settings, OpenRouterDecision
                 return OpenRouterDecision(load_settings(args.env_file,args.model_slot),thresholds=args.thresholds)
             return None
+        def configured_embedder():
+            if args.ranking != 'hybrid':
+                return None
+            from .hybrid import JevEdgeEmbedder
+            return JevEdgeEmbedder(args.jevedge_root,args.embedding_model_path)
         if args.command == 'calibrate':
             from .calibration import select_policy
             spec = json.loads(Path(args.spec).read_text(encoding='utf-8'))
@@ -133,7 +146,7 @@ def main():
             before = corpus_fingerprint(db)
             count_tokens = lambda text:len(encoding.encode_ordinary(text))
             build_context_packet(args.task,args.role,args.role_version,[],budget=args.budget,count_tokens=count_tokens,tokenizer_name=args.tokenizer,catalog_fingerprint=before)
-            rows = search(db,args.task,variant=args.variant,role=args.role,role_version=args.role_version,provider=configured_provider(),limit=args.limit,include_proposed=args.include_proposed,ranking=args.ranking)
+            rows = search(db,args.task,variant=args.variant,role=args.role,role_version=args.role_version,provider=configured_provider(),limit=args.limit,include_proposed=args.include_proposed,ranking=args.ranking,embedder=configured_embedder())
             if corpus_fingerprint(db) != before:
                 raise RuntimeError('catalog changed while preparing context')
             packet = build_context_packet(args.task,args.role,args.role_version,rows,budget=args.budget,count_tokens=count_tokens,tokenizer_name=args.tokenizer,catalog_fingerprint=before)
@@ -192,7 +205,7 @@ def main():
                 encoding = tiktoken.get_encoding(args.tokenizer)
                 count_tokens = lambda text: len(encoding.encode_ordinary(text))
             context_chars = args.context_chars if args.context_chars is not None else (None if args.context_tokens is not None or args.packet_tokens is not None else 4000)
-            print(json.dumps(run_experiment(db,tasks,provider=provider,context_chars=context_chars,context_tokens=args.context_tokens,packet_tokens=args.packet_tokens,count_tokens=count_tokens,tokenizer_name=args.tokenizer,limit=args.limit,label_provenance=args.label_provenance,include_proposed=args.include_proposed,indexing_receipt_ids=indexing_receipts,ranking=args.ranking)))
+            print(json.dumps(run_experiment(db,tasks,provider=provider,context_chars=context_chars,context_tokens=args.context_tokens,packet_tokens=args.packet_tokens,count_tokens=count_tokens,tokenizer_name=args.tokenizer,limit=args.limit,label_provenance=args.label_provenance,include_proposed=args.include_proposed,indexing_receipt_ids=indexing_receipts,ranking=args.ranking,embedder=configured_embedder())))
             return 0
         provider = configured_provider()
         count_tokens = None
@@ -200,7 +213,7 @@ def main():
             import tiktoken
             encoding = tiktoken.get_encoding(args.tokenizer)
             count_tokens = lambda text: len(encoding.encode_ordinary(text))
-        print(json.dumps(search(db,args.query,variant=args.variant,role=args.role,role_version=args.role_version,provider=provider,context_chars=args.context_chars,include_proposed=args.include_proposed,context_tokens=args.context_tokens,count_tokens=count_tokens,ranking=args.ranking)))
+        print(json.dumps(search(db,args.query,variant=args.variant,role=args.role,role_version=args.role_version,provider=provider,context_chars=args.context_chars,include_proposed=args.include_proposed,context_tokens=args.context_tokens,count_tokens=count_tokens,ranking=args.ranking,embedder=configured_embedder())))
         return 0
     finally:
         db.close()

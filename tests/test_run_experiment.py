@@ -144,3 +144,15 @@ def test_experiment_records_common_bm25_ranker(tmp_path):
     assert report['manifest']['ranking'] == 'bm25'
     for variant in report['variants'].values():
         assert variant['queries']['q']['results'][0]['ranking_method'] == 'bm25'
+
+def test_experiment_records_hybrid_encoder_revision(tmp_path):
+    db=open_catalog(':memory:')
+    path=tmp_path/'doc.md'
+    path.write_text('# Pets\nA cat sleeps.')
+    ingest(db,path)
+    class Encoder:
+        metadata={'name':'fixture','weights_sha256':'abc'}
+        def encode(self,texts): return [[1.0,0.0] for _ in texts]
+    report=run_experiment(db,[{'id':'q','query':'feline','labels':None}],ranking='hybrid',embedder=Encoder())
+    assert report['manifest']['embedding']['weights_sha256'] == 'abc'
+    assert all(v['queries']['q']['results'][0]['title'] == 'Pets' for v in report['variants'].values())

@@ -1,5 +1,7 @@
 """Single-writer SQLite catalog."""
 import sqlite3
+import hashlib
+import json
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sources(id TEXT PRIMARY KEY,path TEXT NOT NULL,revision TEXT NOT NULL,body TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'current' CHECK(status IN ('current','superseded','invalidated')), UNIQUE(path,revision));
@@ -38,3 +40,13 @@ def validate_retrievable_ids(db):
     ) GROUP BY id HAVING count(*) > 1 LIMIT 1""").fetchone()
     if collision is not None:
         raise ValueError('ambiguous catalog ID across record types')
+
+def corpus_fingerprint(db):
+    """Hash catalog records and annotations, excluding mutable decision receipts."""
+    tables = ('sources','sections','section_pages','extraction_warnings','generated_index','generated_index_reviews','index_role_annotations','records','evidence','topic_links','topic_link_reviews','role_annotations')
+    digest = hashlib.sha256()
+    for name in tables:
+        rows = [dict(row) for row in db.execute(f'SELECT * FROM {name}').fetchall()]
+        encoded = sorted(json.dumps(row,sort_keys=True,ensure_ascii=False) for row in rows)
+        digest.update(json.dumps([name,encoded],ensure_ascii=False).encode())
+    return digest.hexdigest()

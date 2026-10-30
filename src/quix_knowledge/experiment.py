@@ -1,24 +1,13 @@
 """Reproducible comparative runs over an immutable catalog snapshot."""
 from datetime import datetime, timezone
-import hashlib
 import json
 import time
 
 from .evaluate import evaluate
 from .retrieve import search
+from .store import corpus_fingerprint
 
-_TABLES = ('sources', 'sections', 'section_pages', 'extraction_warnings', 'generated_index', 'generated_index_reviews', 'index_role_annotations', 'records', 'evidence', 'topic_links', 'topic_link_reviews', 'role_annotations')
 _VARIANTS = ('baseline', 'topic', 'decision', 'role')
-
-
-def corpus_fingerprint(db):
-    """Hash records and annotations; decision receipts are run output, not corpus."""
-    digest = hashlib.sha256()
-    for name in _TABLES:
-        rows = [dict(row) for row in db.execute(f'SELECT * FROM {name}').fetchall()]
-        encoded = sorted(json.dumps(row,sort_keys=True,ensure_ascii=False) for row in rows)
-        digest.update(json.dumps([name,encoded],ensure_ascii=False).encode())
-    return digest.hexdigest()
 
 
 def _indexing_receipts(db, receipt_ids):
@@ -54,7 +43,7 @@ def _indexing_receipts(db, receipt_ids):
     return {'decision_calls':len(receipts),'unknown_decisions':sum(r['outcome']=='unknown' for r in receipts),'reported_cost':total('cost'),'input_tokens':total('input_tokens'),'receipts':receipts}
 
 
-def run_experiment(db, tasks, *, provider=None, context_chars=4000, context_tokens=None, packet_tokens=None, count_tokens=None, tokenizer_name=None, limit=10, label_provenance=None, configuration=None, include_proposed=False, indexing_receipt_ids=None, ranking='overlap'):
+def run_experiment(db, tasks, *, provider=None, context_chars=4000, context_tokens=None, packet_tokens=None, count_tokens=None, tokenizer_name=None, limit=10, label_provenance=None, configuration=None, include_proposed=False, indexing_receipt_ids=None, ranking='overlap', embedder=None):
     if not tasks or limit < 0 or (context_chars is not None and context_chars < 0):
         raise ValueError('tasks and nonnegative budgets are required')
     if context_tokens is not None and (context_chars is not None or context_tokens < 0 or count_tokens is None or not tokenizer_name):
@@ -63,6 +52,8 @@ def run_experiment(db, tasks, *, provider=None, context_chars=4000, context_toke
         raise ValueError('packet token budget requires a named counter and excludes other budgets')
     if context_tokens is None and context_chars is None and packet_tokens is None:
         raise ValueError('a context budget is required')
+    if ranking == 'hybrid' and embedder is None:
+        raise ValueError('hybrid ranking requires an explicit embedder')
     ids = [task.get('id') for task in tasks]
     if any(not isinstance(i,str) or not i for i in ids) or len(set(ids)) != len(ids):
         raise ValueError('task IDs must be nonempty and unique')
@@ -90,7 +81,7 @@ def run_experiment(db, tasks, *, provider=None, context_chars=4000, context_toke
                 raise RuntimeError('catalog changed during experiment')
             previous = db.execute('SELECT COALESCE(MAX(id),0) FROM decision_receipts').fetchone()[0]
             started = time.monotonic()
-            rows = search(db, task['query'], variant=variant, role=task.get('role'), role_version=task.get('role_version'), provider=provider, limit=limit, context_chars=context_chars, context_tokens=context_tokens,count_tokens=count_tokens,include_proposed=include_proposed,ranking=ranking)
+            rows = search(db, task['query'], variant=variant, role=task.get('role'), role_version=task.get('role_version'), provider=provider, limit=limit, context_chars=context_chars, context_tokens=context_tokens,count_tokens=count_tokens,include_proposed=include_proposed,ranking=ranking,embedder=embedder)
             packet = None
             packet_count = None
             if packet_tokens is not None:
@@ -115,4 +106,4 @@ def run_experiment(db, tasks, *, provider=None, context_chars=4000, context_toke
     provider_info = None
     if provider is not None:
         provider_info = {'adapter':type(provider).__name__,'configured_model':getattr(getattr(provider,'settings',None),'model',None),'thresholds':getattr(provider,'thresholds',None),'prompt_version':getattr(provider,'prompt_version',None),'stability_trials':getattr(provider,'trials',None)}
-    return {'manifest':{'created_at':datetime.now(timezone.utc).isoformat(), 'corpus_revision':fingerprint, 'tasks':tasks, 'label_provenance':label_provenance, 'provider_configured':provider is not None, 'provider':provider_info, 'limit':limit, 'ranking':ranking, 'context_chars':context_chars, 'context_tokens':context_tokens, 'packet_tokens':packet_tokens, 'tokenizer':tokenizer_name, 'include_proposed':include_proposed, 'indexing':indexing, 'configuration':configuration}, 'variants':variants}
+    return {'manifest':{'created_at':datetime.now(timezone.utc).isoformat(), 'corpus_revision':fingerprint, 'tasks':tasks, 'label_provenance':label_provenance, 'provider_configured':provider is not None, 'provider':provider_info, 'limit':limit, 'ranking':ranking, 'embedding':getattr(embedder,'metadata',None), 'context_chars':context_chars, 'context_tokens':context_tokens, 'packet_tokens':packet_tokens, 'tokenizer':tokenizer_name, 'include_proposed':include_proposed, 'indexing':indexing, 'configuration':configuration}, 'variants':variants}

@@ -2,7 +2,7 @@
 import re
 import json
 from .decisions import judge, decision_metadata
-from .store import validate_retrievable_ids
+from .store import validate_retrievable_ids, corpus_fingerprint
 
 def tokens(text):
     return set(re.findall(r'[\w]+',text.lower()))
@@ -17,11 +17,11 @@ def _singular_tokens(text):
         result.add(token)
     return result
 
-def search(db, query, variant='baseline', role=None, role_version=None, provider=None, limit=10, context_chars=None, include_proposed=False, context_tokens=None, count_tokens=None, ranking='overlap'):
+def search(db, query, variant='baseline', role=None, role_version=None, provider=None, limit=10, context_chars=None, include_proposed=False, context_tokens=None, count_tokens=None, ranking='overlap', embedder=None):
     validate_retrievable_ids(db)
     if variant not in {'baseline','topic','decision','role'}:
         raise ValueError('unknown retrieval variant')
-    if ranking not in ('overlap','bm25'):
+    if ranking not in ('overlap','bm25','hybrid'):
         raise ValueError('unknown ranking method')
     if limit < 0:
         raise ValueError('limit must be nonnegative')
@@ -29,6 +29,11 @@ def search(db, query, variant='baseline', role=None, role_version=None, provider
         raise ValueError('context_chars must be nonnegative')
     if context_tokens is not None and (context_tokens < 0 or count_tokens is None or context_chars is not None):
         raise ValueError('token budget requires a counter and excludes character budget')
+    if ranking == 'hybrid' and embedder is None:
+        raise ValueError('hybrid ranking requires an explicit embedder')
+    if limit == 0:
+        return []
+    before_embedding = corpus_fingerprint(db) if ranking == 'hybrid' else None
     query_tokens = tokens(query)
     rows = db.execute("SELECT sections.*,sources.path,sources.revision,sources.status AS source_status,section_pages.page_start,section_pages.page_end FROM sections JOIN sources ON sources.id=sections.source_id LEFT JOIN section_pages ON sections.id=section_pages.section_id WHERE sources.status='current'").fetchall()
     results = []
@@ -53,13 +58,33 @@ def search(db, query, variant='baseline', role=None, role_version=None, provider
         evidence_status = 'unsupported' if not refs else 'stale' if any(r[1] != 'current' for r in refs) else 'current'
         item.update(record_type='agent_record',title=item['kind'],path=None,revision=None,source_status=item['status'],evidence=evidence,unsupported=not evidence,evidence_status=evidence_status)
         candidates.append(item)
-    if ranking == 'bm25':
+    dense_scores = [None] * len(candidates)
+    if ranking in ('bm25','hybrid'):
         from .bm25 import score_documents
         corpus = [item['title']+' '+item['body'] for item in candidates if item['record_type'] != 'generated_index']
         lexical_scores = score_documents(query,[item['title']+' '+item['body'] for item in candidates],corpus=corpus)
     else:
         lexical_scores = [len(query_tokens & tokens(item['title']+' '+item['body'])) for item in candidates]
-    for item, lexical in zip(candidates,lexical_scores):
+    if ranking == 'hybrid' and candidates:
+        try:
+            from .hybrid import similarities
+            dense_scores = similarities(embedder,query[:4000],[item['title'][:512]+'\n'+item['body'][:8000] for item in candidates])
+        except Exception as exc:
+            fallback = search(db,query,variant=variant,role=role,role_version=role_version,provider=provider,limit=limit,context_chars=context_chars,include_proposed=include_proposed,context_tokens=context_tokens,count_tokens=count_tokens,ranking='bm25')
+            if not fallback:
+                raise RuntimeError('embedding unavailable and lexical fallback returned no results') from exc
+            for item in fallback:
+                item['embedding_fallback_reason'] = 'embedding_unavailable'
+                item['requested_ranking'] = 'hybrid'
+            return fallback
+        if corpus_fingerprint(db) != before_embedding:
+            raise RuntimeError('catalog changed during embedding')
+    lexical_order = sorted((i for i,value in enumerate(lexical_scores) if value > 0),key=lambda i:(-lexical_scores[i],candidates[i]['id']))
+    dense_order = sorted((i for i,value in enumerate(dense_scores) if value is not None and value > 0),key=lambda i:(-dense_scores[i],candidates[i]['id']))
+    lexical_ranks = {i:rank for rank,i in enumerate(lexical_order,1)}
+    dense_ranks = {i:rank for rank,i in enumerate(dense_order,1)}
+    zero_vectors = sum(value is None for value in dense_scores) if ranking == 'hybrid' else 0
+    for i, (item, lexical) in enumerate(zip(candidates,lexical_scores)):
         column = 'record_id' if item['record_type'] == 'agent_record' else 'section_id'
         annotation_id = item['source_section_id'] if item['record_type'] == 'generated_index' else item['id']
         topics = [r[0] for r in db.execute(f"SELECT topic FROM topic_links WHERE {column}=? AND status='accepted'",(annotation_id,))]
@@ -68,9 +93,15 @@ def search(db, query, variant='baseline', role=None, role_version=None, provider
         topic = len(query_tokens & tokens(' '.join(topics))) if variant != 'baseline' else 0
         broad_text = item['title']+' '+item['body']+(' '+' '.join(topics) if variant != 'baseline' else '')
         broad_score = len(_singular_tokens(query) & _singular_tokens(broad_text))
-        if not lexical and not topic and not broad_score:
+        if not lexical and not topic and not broad_score and i not in dense_ranks:
             continue
-        item.update(lexical_score=lexical,topic_score=topic,topics=topics,ranking_method=ranking,role_score=None,role_score_status=None,role_score_method=None,role_score_model=None,role_score_scope=None,decision=None)
+        item.update(lexical_score=lexical,topic_score=topic,topics=topics,ranking_method=ranking,dense_similarity=dense_scores[i],embedding_metadata=getattr(embedder,'metadata',None) if ranking == 'hybrid' else None,role_score=None,role_score_status=None,role_score_method=None,role_score_model=None,role_score_scope=None,decision=None)
+        if ranking == 'hybrid':
+            item['embedding_issue'] = 'zero_document_vector' if dense_scores[i] is None else None
+            item['embedding_zero_vector_count'] = zero_vectors
+            item['embedding_text_truncated'] = len(item['title']) > 512 or len(item['body']) > 8000
+            item['embedding_query_truncated'] = len(query) > 4000
+            item['embedding_may_token_truncate'] = bool((item['embedding_metadata'] or {}).get('max_input_tokens'))
         if variant == 'role' and role and role_version:
             annotation = None
             scope = 'record' if item['record_type'] == 'agent_record' else 'section'
@@ -86,10 +117,13 @@ def search(db, query, variant='baseline', role=None, role_version=None, provider
                 item['role_score_method'] = annotation['method']
                 item['role_score_model'] = annotation['model']
                 item['role_score_scope'] = scope
-        base = lexical + (0.05*topic if ranking == 'bm25' else topic)
-        role_boost = (min(0.25,0.1*base) if ranking == 'bm25' else 0.25) * item['role_score'] if item['role_score'] is not None else 0
+        if ranking == 'hybrid':
+            base = (1/(60+lexical_ranks[i]) if i in lexical_ranks else 0) + (1/(60+dense_ranks[i]) if i in dense_ranks else 0) + 0.003*min(topic,3)
+        else:
+            base = lexical + (0.05*topic if ranking == 'bm25' else topic)
+        role_boost = (min(0.25,0.1*base) if ranking in ('bm25','hybrid') else 0.25) * item['role_score'] if item['role_score'] is not None else 0
         item['score'] = base + role_boost
-        if lexical or topic:
+        if lexical or topic or i in dense_ranks:
             results.append(item)
         else:
             item['score'] += broad_score
@@ -97,6 +131,8 @@ def search(db, query, variant='baseline', role=None, role_version=None, provider
             broadened.append(item)
     if not results:
         results = broadened
+    if ranking == 'hybrid' and candidates and not results and zero_vectors:
+        raise RuntimeError('embedding produced incomplete document vectors and search returned no results')
     results = sorted(results,key=lambda x:(-x['score'],x['id']))[:limit]
     if variant in {'decision','role'} and provider is not None:
         source_changed = False
@@ -116,14 +152,14 @@ def search(db, query, variant='baseline', role=None, role_version=None, provider
             if source_changed:
                 decision = item['decision'] = dict(decision,outcome='unknown',reason='source changed during decision')
             adjustment = {'supported':1,'unsuitable':-1}.get(decision['outcome'],0)
-            item['score'] += adjustment * (min(0.1,0.1*item['score']) if ranking == 'bm25' else 0.1)
+            item['score'] += adjustment * (min(0.1,0.1*item['score']) if ranking in ('bm25','hybrid') else 0.1)
             db.execute('INSERT INTO decision_receipts(provider,model,outcome,detail) VALUES (?,?,?,?)',(decision.get('provider','unknown'),decision.get('model'),decision['outcome'],json.dumps({'item_id':item['id'],'query':query,**decision_metadata(decision)})))
             if source_changed:
                 break
         outcomes = [item['decision']['outcome'] for item in results if item['decision'] is not None]
         if source_changed or any(outcome in ('unknown','unclear') for outcome in outcomes):
             reason = 'source_changed' if source_changed else 'decision_unknown' if 'unknown' in outcomes else 'decision_unclear'
-            baseline = search(db,query,variant='baseline',limit=limit,ranking=ranking)
+            baseline = search(db,query,variant='baseline',limit=limit,ranking=ranking,embedder=embedder)
             decisions = {item['id']:item['decision'] for item in results}
             results = baseline if source_changed else baseline or results
             for item in results:
