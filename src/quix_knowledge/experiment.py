@@ -7,7 +7,7 @@ import time
 from .evaluate import evaluate
 from .retrieve import search
 
-_TABLES = ('sources', 'sections', 'section_pages', 'extraction_warnings', 'generated_index', 'generated_index_reviews', 'index_role_annotations', 'records', 'evidence', 'topic_links', 'role_annotations')
+_TABLES = ('sources', 'sections', 'section_pages', 'extraction_warnings', 'generated_index', 'generated_index_reviews', 'index_role_annotations', 'records', 'evidence', 'topic_links', 'topic_link_reviews', 'role_annotations')
 _VARIANTS = ('baseline', 'topic', 'decision', 'role')
 
 
@@ -39,6 +39,9 @@ def _indexing_receipts(db, receipt_ids):
             source = db.execute('SELECT sources.status FROM sections JOIN sources ON sections.source_id=sources.id WHERE sections.id=?',(detail['section_id'],)).fetchone()
         elif 'generated_index_id' in detail:
             source = db.execute('SELECT sources.status FROM generated_index JOIN sections ON generated_index.section_id=sections.id JOIN sources ON sections.source_id=sources.id WHERE generated_index.id=?',(detail['generated_index_id'],)).fetchone()
+        elif 'record_id' in detail:
+            source = db.execute("""SELECT 'current' AS status FROM records r WHERE r.id=? AND r.status IN ('proposed','current') AND NOT EXISTS
+                (SELECT 1 FROM evidence e JOIN sections s ON s.id=e.section_id JOIN sources x ON x.id=s.source_id WHERE e.record_id=r.id AND x.status != 'current')""",(detail['record_id'],)).fetchone()
         else:
             raise ValueError('receipt is not an indexing decision')
         if source is None or source['status'] != 'current':

@@ -42,6 +42,26 @@ def assess_topic(db, section_id, topic, provider, proposal_id=None):
         db.execute('INSERT INTO decision_receipts(provider,model,outcome,detail) VALUES (?,?,?,?)',(result.get('provider','unknown'),result.get('model'),result['outcome'],json.dumps({'section_id':section_id,'topic':topic,**decision_metadata(result)})))
     return result
 
+def assess_record_topic(db, record_id, topic, provider):
+    """Assess a proposed topic for an agent record without endorsing its claim."""
+    if not isinstance(topic,str) or not topic.strip():
+        raise ValueError('topic is required')
+    record = db.execute("""SELECT kind,body FROM records r WHERE id=? AND status IN ('proposed','current') AND NOT EXISTS
+        (SELECT 1 FROM evidence e JOIN sections s ON s.id=e.section_id JOIN sources x ON x.id=s.source_id WHERE e.record_id=r.id AND x.status != 'current')""",(record_id,)).fetchone()
+    if record is None:
+        raise ValueError('record is not current or proposed')
+    result = judge(provider,{'title':record['kind'],'text':record['body'][:4000],'text_truncated':len(record['body'])>4000,'topic':topic},'topic supported')
+    with db:
+        current = db.execute("""SELECT 1 FROM records r WHERE r.id=? AND r.status IN ('proposed','current') AND NOT EXISTS
+            (SELECT 1 FROM evidence e JOIN sections s ON s.id=e.section_id JOIN sources x ON x.id=s.source_id WHERE e.record_id=r.id AND x.status != 'current')""",(record_id,)).fetchone()
+        if current is None:
+            result = dict(result,outcome='unknown',reason='record or evidence changed during decision')
+        else:
+            status = 'rejected' if result['outcome'] == 'unsuitable' else 'proposed'
+            db.execute('INSERT INTO topic_links(record_id,topic,method,status) VALUES (?,?,?,?)',(record_id,topic,'decision',status))
+        db.execute('INSERT INTO decision_receipts(provider,model,outcome,detail) VALUES (?,?,?,?)',(result.get('provider','unknown'),result.get('model'),result['outcome'],json.dumps({'record_id':record_id,'topic':topic,'question':'topic supported',**decision_metadata(result)})))
+    return result
+
 
 def assess_role(db, section_id, role, role_version, role_purpose, provider):
     """Save a provisional role-usefulness estimate for a section or generated entry."""

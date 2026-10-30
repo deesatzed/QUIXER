@@ -23,6 +23,12 @@ def main():
     review_index.add_argument('entry_id')
     review_index.add_argument('decision',choices=('accepted','rejected'))
     review_index.add_argument('--reviewer',required=True)
+    list_topics = sub.add_parser('list-topics')
+    list_topics.add_argument('--status',choices=('proposed','accepted','rejected','stale'))
+    review_topic_parser = sub.add_parser('review-topic')
+    review_topic_parser.add_argument('link_id',type=int)
+    review_topic_parser.add_argument('decision',choices=('accepted','rejected'))
+    review_topic_parser.add_argument('--reviewer',required=True)
     role_parser = sub.add_parser('assess-role')
     role_parser.add_argument('section_id')
     role_parser.add_argument('--role',required=True)
@@ -30,6 +36,11 @@ def main():
     role_parser.add_argument('--role-purpose',required=True)
     role_parser.add_argument('--env-file')
     role_parser.add_argument('--model-slot',type=int,choices=(1,2,3,4))
+    record_topic_parser = sub.add_parser('assess-record-topic')
+    record_topic_parser.add_argument('record_id')
+    record_topic_parser.add_argument('topic')
+    record_topic_parser.add_argument('--env-file')
+    record_topic_parser.add_argument('--model-slot',type=int,choices=(1,2,3,4))
     experiment_parser = sub.add_parser('experiment')
     experiment_parser.add_argument('tasks', help='JSON array of task records')
     exp_budget = experiment_parser.add_mutually_exclusive_group()
@@ -54,17 +65,17 @@ def main():
     search_parser.add_argument('--include-proposed', action='store_true')
     search_parser.add_argument('--env-file')
     search_parser.add_argument('--model-slot', type=int, choices=(1,2,3,4))
-    for provider_parser in (index_parser, role_parser, experiment_parser, search_parser):
+    for provider_parser in (index_parser, role_parser, record_topic_parser, experiment_parser, search_parser):
         provider_parser.add_argument('--jev-url',help='HTTP loopback JevEdge0 workbench origin')
         provider_parser.add_argument('--stability-trials',type=int,default=1)
     args = parser.parse_args()
-    if args.command in ('index','assess-role','experiment','search'):
+    if args.command in ('index','assess-role','assess-record-topic','experiment','search'):
         if bool(args.env_file) != bool(args.model_slot):
             parser.error('--env-file and --model-slot must be provided together')
         if args.jev_url and args.env_file:
             parser.error('choose one decision provider')
-        if args.command == 'assess-role' and not (args.jev_url or args.env_file):
-            parser.error('assess-role requires a decision provider')
+        if args.command in ('assess-role','assess-record-topic') and not (args.jev_url or args.env_file):
+            parser.error(f'{args.command} requires a decision provider')
     if args.command == 'experiment' and bool(args.tokenizer) != (args.context_tokens is not None):
         parser.error('--context-tokens and --tokenizer must be provided together')
     if args.command == 'search' and (args.env_file or args.jev_url) and args.variant not in ('decision','role'):
@@ -81,6 +92,24 @@ def main():
                 from .openrouter import load_settings, OpenRouterDecision
                 return OpenRouterDecision(load_settings(args.env_file,args.model_slot))
             return None
+        if args.command == 'assess-record-topic':
+            from .decisions import assess_record_topic
+            result = assess_record_topic(db,args.record_id,args.topic,configured_provider())
+            print(json.dumps(result))
+            return 0 if result['outcome'] != 'unknown' else 1
+        if args.command == 'list-topics':
+            query = 'SELECT t.*,s.path,s.revision,x.title AS section_title FROM topic_links t LEFT JOIN sections x ON x.id=t.section_id LEFT JOIN sources s ON s.id=x.source_id'
+            params = ()
+            if args.status:
+                query += ' WHERE t.status=?'
+                params = (args.status,)
+            print(json.dumps([dict(row) for row in db.execute(query+' ORDER BY t.id',params)]))
+            return 0
+        if args.command == 'review-topic':
+            from .records import review_topic
+            review_topic(db,args.link_id,args.decision,args.reviewer)
+            print(json.dumps({'link_id':args.link_id,'decision':args.decision,'reviewer':args.reviewer}))
+            return 0
         if args.command == 'assess-role':
             from .decisions import assess_role
             provider = configured_provider()

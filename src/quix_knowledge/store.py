@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS sections(id TEXT PRIMARY KEY,source_id TEXT NOT NULL 
 CREATE TABLE IF NOT EXISTS records(id TEXT PRIMARY KEY,kind TEXT NOT NULL CHECK(kind IN ('finding','decision','test_result')),body TEXT NOT NULL,producer TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'proposed' CHECK(status IN ('proposed','current','superseded','invalidated')),supersedes TEXT REFERENCES records(id),output_ref TEXT);
 CREATE TABLE IF NOT EXISTS evidence(record_id TEXT NOT NULL REFERENCES records(id),section_id TEXT NOT NULL REFERENCES sections(id),PRIMARY KEY(record_id,section_id));
 CREATE TABLE IF NOT EXISTS topic_links(id INTEGER PRIMARY KEY,section_id TEXT REFERENCES sections(id),record_id TEXT REFERENCES records(id),topic TEXT NOT NULL,method TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('proposed','accepted','rejected','stale')),CHECK((section_id IS NULL) != (record_id IS NULL)));
+CREATE TABLE IF NOT EXISTS topic_link_reviews(id INTEGER PRIMARY KEY,link_id INTEGER NOT NULL REFERENCES topic_links(id),reviewer TEXT NOT NULL,decision TEXT NOT NULL CHECK(decision IN ('accepted','rejected')),reviewed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));
 CREATE TABLE IF NOT EXISTS role_annotations(id INTEGER PRIMARY KEY,section_id TEXT REFERENCES sections(id),record_id TEXT REFERENCES records(id),role TEXT NOT NULL,role_version TEXT NOT NULL,score REAL NOT NULL CHECK(score BETWEEN 0 AND 1),method TEXT NOT NULL,model TEXT,source_revision TEXT,status TEXT NOT NULL DEFAULT 'proposed' CHECK(status IN ('proposed','accepted','stale')),CHECK((section_id IS NULL) != (record_id IS NULL)));
 CREATE TABLE IF NOT EXISTS decision_receipts(id INTEGER PRIMARY KEY,provider TEXT NOT NULL,model TEXT,outcome TEXT NOT NULL,detail TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS ingestion_failures(path TEXT NOT NULL,reason TEXT NOT NULL);
@@ -22,10 +23,10 @@ def open_catalog(path):
     db.row_factory = sqlite3.Row
     db.execute('PRAGMA foreign_keys=ON')
     version = db.execute('PRAGMA user_version').fetchone()[0]
-    if version not in (0, 1, 2, 3, 4):
+    if version not in (0, 1, 2, 3, 4, 5):
         db.close()
         raise ValueError(f'Unsupported schema version: {version}')
     db.executescript(SCHEMA)
-    db.execute('PRAGMA user_version=4')
+    db.execute('PRAGMA user_version=5')
     db.commit()
     return db

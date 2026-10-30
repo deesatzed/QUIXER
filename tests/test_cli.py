@@ -88,3 +88,22 @@ def test_cli_rejects_mixed_local_and_openrouter_configuration(tmp_path):
     result=subprocess.run(cmd,env=env,capture_output=True,text=True)
     assert result.returncode != 0
     assert 'choose one decision provider' in result.stderr
+
+def test_cli_lists_and_reviews_heading_topics(tmp_path):
+    path=tmp_path/'doc.md'
+    path.write_text('# Retry\nRetry twice.')
+    env=dict(os.environ,PYTHONPATH=str(Path(__file__).resolve().parents[1]/'src'))
+    base=[sys.executable,'-m','quix_knowledge','--db',str(tmp_path/'db')]
+    subprocess.run([*base,'index',str(path)],env=env,capture_output=True,text=True,check=True)
+    links=json.loads(subprocess.run([*base,'list-topics'],env=env,capture_output=True,text=True,check=True).stdout)
+    assert links[0]['topic'] == 'Retry'
+    subprocess.run([*base,'review-topic',str(links[0]['id']),'accepted','--reviewer','reviewer'],env=env,capture_output=True,text=True,check=True)
+    links=json.loads(subprocess.run([*base,'list-topics','--status','accepted'],env=env,capture_output=True,text=True,check=True).stdout)
+    assert len(links) == 1
+
+def test_cli_record_topic_requires_provider_configuration(tmp_path):
+    env=dict(os.environ,PYTHONPATH=str(Path(__file__).resolve().parents[1]/'src'))
+    cmd=[sys.executable,'-m','quix_knowledge','--db',str(tmp_path/'db'),'assess-record-topic','finding','retry']
+    result=subprocess.run(cmd,env=env,capture_output=True,text=True)
+    assert result.returncode != 0
+    assert 'requires a decision provider' in result.stderr

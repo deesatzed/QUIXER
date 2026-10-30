@@ -24,12 +24,13 @@ def test_version_one_catalog_migrates_without_losing_sources(tmp_path):
     db.execute('DROP TABLE extraction_warnings')
     db.execute('DROP TABLE generated_index_reviews')
     db.execute('DROP TABLE index_role_annotations')
+    db.execute('DROP TABLE topic_link_reviews')
     db.execute('DROP TABLE generated_index')
     db.execute('PRAGMA user_version=1')
     db.commit()
     db.close()
     reopened = open_catalog(path)
-    assert reopened.execute('PRAGMA user_version').fetchone()[0] == 4
+    assert reopened.execute('PRAGMA user_version').fetchone()[0] == 5
     assert reopened.execute("SELECT body FROM sources WHERE id='old'").fetchone()[0] == 'body'
     assert reopened.execute('SELECT count(*) FROM section_pages').fetchone()[0] == 0
     assert reopened.execute('SELECT count(*) FROM generated_index').fetchone()[0] == 0
