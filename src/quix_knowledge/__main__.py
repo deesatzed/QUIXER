@@ -58,6 +58,12 @@ def main():
     experiment_parser.add_argument('--model-slot', type=int, choices=(1,2,3,4))
     calibrate_parser = sub.add_parser('calibrate')
     calibrate_parser.add_argument('spec',help='JSON labeled decisions and candidate thresholds')
+    review_prepare_parser = sub.add_parser('prepare-review')
+    review_prepare_parser.add_argument('tasks',help='JSON array of tasks')
+    review_prepare_parser.add_argument('--include-proposed',action='store_true')
+    review_compile_parser = sub.add_parser('compile-review')
+    review_compile_parser.add_argument('packet',help='reviewed JSON packet')
+    experiment_parser.add_argument('--reviewed',action='store_true',help='tasks input is a compiled review artifact')
     search_parser = sub.add_parser('search')
     search_parser.add_argument('query')
     search_parser.add_argument('--variant', choices=('baseline','topic','decision','role'), default='baseline')
@@ -104,6 +110,8 @@ def main():
             parser.error(f'{args.command} requires a decision provider')
     if args.command == 'experiment' and bool(args.tokenizer) != (args.context_tokens is not None or args.packet_tokens is not None):
         parser.error('--context-tokens or --packet-tokens and --tokenizer must be provided together')
+    if args.command == 'experiment' and args.reviewed and (args.label_provenance or args.include_proposed):
+        parser.error('reviewed labels supply their own provenance and proposal scope')
     if args.command in ('search','context') and (args.env_file or args.jev_url) and args.variant not in ('decision','role'):
         parser.error('a model requires the decision or role variant')
     if args.command == 'search' and bool(args.tokenizer) != (args.context_tokens is not None):
@@ -138,6 +146,16 @@ def main():
             spec = json.loads(Path(args.spec).read_text(encoding='utf-8'))
             result = select_policy(spec['rows'],spec['threshold_pairs'],max_error_rate=spec.get('max_error_rate',0.0),min_actions=spec.get('min_actions',3),label_provenance=spec['label_provenance'])
             print(json.dumps(result))
+            return 0
+        if args.command == 'prepare-review':
+            from .labeling import prepare_review
+            tasks = json.loads(Path(args.tasks).read_text(encoding='utf-8'))
+            print(json.dumps(prepare_review(db,tasks,include_proposed=args.include_proposed)))
+            return 0
+        if args.command == 'compile-review':
+            from .labeling import compile_review
+            packet = json.loads(Path(args.packet).read_text(encoding='utf-8'))
+            print(json.dumps(compile_review(db,packet)))
             return 0
         if args.command == 'assess-record-topic':
             from .decisions import assess_record_topic
@@ -201,7 +219,7 @@ def main():
             print(json.dumps(result))
             return 0 if result['source_id'] and result.get('status') != 'source_changed' else 1
         if args.command == 'experiment':
-            from .experiment import run_experiment
+            from .experiment import run_experiment, run_reviewed_experiment
             provider = configured_provider()
             tasks = json.loads(Path(args.tasks).read_text(encoding='utf-8'))
             indexing_receipts = json.loads(Path(args.indexing_receipts).read_text(encoding='utf-8')) if args.indexing_receipts else None
@@ -211,7 +229,12 @@ def main():
                 encoding = tiktoken.get_encoding(args.tokenizer)
                 count_tokens = lambda text: len(encoding.encode_ordinary(text))
             context_chars = args.context_chars if args.context_chars is not None else (None if args.context_tokens is not None or args.packet_tokens is not None else 4000)
-            print(json.dumps(run_experiment(db,tasks,provider=provider,context_chars=context_chars,context_tokens=args.context_tokens,packet_tokens=args.packet_tokens,count_tokens=count_tokens,tokenizer_name=args.tokenizer,limit=args.limit,label_provenance=args.label_provenance,include_proposed=args.include_proposed,indexing_receipt_ids=indexing_receipts,ranking=args.ranking,embedder=configured_embedder())))
+            options = dict(provider=provider,context_chars=context_chars,context_tokens=args.context_tokens,packet_tokens=args.packet_tokens,count_tokens=count_tokens,tokenizer_name=args.tokenizer,limit=args.limit,indexing_receipt_ids=indexing_receipts,ranking=args.ranking,embedder=configured_embedder())
+            if args.reviewed:
+                result = run_reviewed_experiment(db,tasks,**options)
+            else:
+                result = run_experiment(db,tasks,label_provenance=args.label_provenance,include_proposed=args.include_proposed,**options)
+            print(json.dumps(result))
             return 0
         provider = configured_provider()
         count_tokens = None

@@ -107,3 +107,14 @@ def run_experiment(db, tasks, *, provider=None, context_chars=4000, context_toke
     if provider is not None:
         provider_info = {'adapter':type(provider).__name__,'configured_model':getattr(getattr(provider,'settings',None),'model',None),'thresholds':getattr(provider,'thresholds',None),'prompt_version':getattr(provider,'prompt_version',None),'stability_trials':getattr(provider,'trials',None)}
     return {'manifest':{'created_at':datetime.now(timezone.utc).isoformat(), 'corpus_revision':fingerprint, 'tasks':tasks, 'label_provenance':label_provenance, 'provider_configured':provider is not None, 'provider':provider_info, 'limit':limit, 'ranking':ranking, 'embedding':getattr(embedder,'metadata',None), 'context_chars':context_chars, 'context_tokens':context_tokens, 'packet_tokens':packet_tokens, 'tokenizer':tokenizer_name, 'include_proposed':include_proposed, 'indexing':indexing, 'configuration':configuration}, 'variants':variants}
+
+def run_reviewed_experiment(db, reviewed, **kwargs):
+    if not isinstance(reviewed,dict) or reviewed.get('schema') != 'quix-reviewed-labels-v1':
+        raise ValueError('invalid reviewed-label artifact')
+    if reviewed.get('corpus_revision') != corpus_fingerprint(db):
+        raise ValueError('reviewed labels do not match the current catalog')
+    if 'label_provenance' in kwargs or 'include_proposed' in kwargs:
+        raise ValueError('review provenance and proposal scope come from the reviewed artifact')
+    if type(reviewed.get('include_proposed')) is not bool or not isinstance(reviewed.get('label_provenance'),dict):
+        raise ValueError('invalid reviewed-label provenance or proposal scope')
+    return run_experiment(db,reviewed['tasks'],label_provenance=reviewed['label_provenance'],include_proposed=reviewed['include_proposed'],**kwargs)
