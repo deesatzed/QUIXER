@@ -114,7 +114,8 @@ def index_source(db, path, provider=None, max_decisions=10):
             else:
                 with db:
                     db.execute('INSERT INTO topic_links(section_id,topic,method,status) VALUES (?,?,?,?)', (section['id'], section['title'], 'heading', 'proposed'))
-        if sum(1 for _ in _paragraphs(section['body'])) > 1:
+        structure_rejected = (result['structure_judgment'] or {}).get('outcome') == 'unsuitable'
+        if structure_rejected or sum(1 for _ in _paragraphs(section['body'])) > 1:
             created, calls = _propose_generated(db, section, provider, max_decisions-result['decision_calls'])
             result['generated_entries'] += created
             result['decision_calls'] += calls

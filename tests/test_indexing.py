@@ -72,3 +72,14 @@ def test_invalid_usage_is_unknown_not_a_measured_cost(tmp_path):
     result=index_source(db,path,provider=provider,max_decisions=1)
     assert result['reported_cost'] is None
     assert result['input_tokens'] is None
+
+def test_negative_structure_decision_proposes_finer_entries_without_discarding_source(tmp_path):
+    db=open_catalog(':memory:')
+    path=tmp_path/'doc.md'
+    path.write_text('# General\nRetry after failure.')
+    def provider(state,question):
+        return {'outcome':'unsuitable' if question == 'structure usable' else 'unclear','provider':'fixture'}
+    result=index_source(db,path,provider=provider,max_decisions=3)
+    assert result['generated_entries'] == 1
+    assert db.execute('SELECT status FROM generated_index').fetchone()[0] == 'proposed'
+    assert db.execute('SELECT count(*) FROM sections').fetchone()[0] == 1
