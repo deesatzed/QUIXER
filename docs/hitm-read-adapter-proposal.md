@@ -1,6 +1,6 @@
 # Proposed read-only HITMCockpit adapter
 
-Status: **draft for separate review; not approved or implemented**. This document makes the integration decision concrete. It does not change either repository's existing policy or authorize a live swarm connection.
+Status: **read-only first-slice scope approved by the user; integration in progress**. This approval does not change either repository's existing policy or authorize a live swarm connection, MindStore export, write-back or agent dispatch.
 
 ## Intended first slice
 
@@ -17,6 +17,8 @@ HITMCockpit's `MindStore.slices(role:kinds:tags:budgetCharacters:destination:)` 
 3. If QUIX is unavailable, returns malformed data, detects a changed source or lacks usable evidence, the orchestrator records that fact and proceeds according to its existing fallback and gate policy. It must not silently present stale or unverified material as current. The source paths and document revisions must be revalidated before use; a returned anchor is not evidence the source still matches the indexed bytes.
 4. QUIX's returned-body token budget excludes protocol framing, titles, evidence metadata and agent prompt overhead. The caller must budget the complete agent request using its own tokenizer. A `cl100k_base` count is not proof of a different model's token count.
 
+QUIX now has a Python-only version 1 contract, `quix_knowledge.hitm.retrieve_context`, for a task, role/version, result limit and character budget. It checks current source revisions before and after search and returns a bounded JSON context packet. For text the revision is the hash of UTF-8 text after Python universal-newline normalization; for PDF it is the raw-byte hash. It checks every current indexed source, so a missing or changed source fails the request. The character budget covers the serialized packet, not an enclosing protocol response or the recipient's full prompt. These checks are point-in-time; the caller must revalidate sources before use. There is no HITMCockpit caller or live transport yet.
+
 ## Ownership and lifecycle
 
 The single-writer QUIX catalog remains separate from HITMCockpit's single-process `MindStore`; neither SQLite nor `.hitm` gains multi-process writer safety through this proposal. Explicitly re-ingest changed source files before retrieval. Future indexing of MindStore content would require a separate design for allowed statuses, verification receipts, provenance, sensitivity/destination filtering, and revocation when an entry is corrected or expired. HITMCockpit's existing profile and destination restrictions remain in force even though the QUIX pilot corpus is non-sensitive.
@@ -28,4 +30,4 @@ The single-writer QUIX catalog remains separate from HITMCockpit's single-proces
 - A real, independently labeled implementation/review retrieval comparison at matched context budgets before measuring the adapter's effect on agents.
 - A controlled agent-task comparison with independent outcome review before claiming improved swarm performance. Report adapter failures, latency and cost separately.
 
-Open decisions for the separate review: transport and process ownership, source-revision validation method, whether and how to expose verified MindStore slices, schema/versioning and explicit human approval for the integration scope. No live service, file watcher, memory write-back or agent dispatch is authorized by this draft.
+Open implementation decisions: transport and process ownership, how the caller revalidates source revisions, and whether and how to expose verified MindStore slices under a future separately approved design. No live service, file watcher, memory write-back or agent dispatch is authorized by this proposal.
