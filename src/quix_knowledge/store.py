@@ -10,6 +10,8 @@ CREATE TABLE IF NOT EXISTS topic_links(id INTEGER PRIMARY KEY,section_id TEXT RE
 CREATE TABLE IF NOT EXISTS role_annotations(id INTEGER PRIMARY KEY,section_id TEXT REFERENCES sections(id),record_id TEXT REFERENCES records(id),role TEXT NOT NULL,role_version TEXT NOT NULL,score REAL NOT NULL CHECK(score BETWEEN 0 AND 1),method TEXT NOT NULL,model TEXT,source_revision TEXT,status TEXT NOT NULL DEFAULT 'proposed' CHECK(status IN ('proposed','accepted','stale')),CHECK((section_id IS NULL) != (record_id IS NULL)));
 CREATE TABLE IF NOT EXISTS decision_receipts(id INTEGER PRIMARY KEY,provider TEXT NOT NULL,model TEXT,outcome TEXT NOT NULL,detail TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS ingestion_failures(path TEXT NOT NULL,reason TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS section_pages(section_id TEXT PRIMARY KEY REFERENCES sections(id),page_start INTEGER NOT NULL CHECK(page_start >= 1),page_end INTEGER NOT NULL CHECK(page_end >= page_start));
+CREATE TABLE IF NOT EXISTS extraction_warnings(source_id TEXT NOT NULL REFERENCES sources(id),page INTEGER NOT NULL,reason TEXT NOT NULL,PRIMARY KEY(source_id,page));
 """
 
 def open_catalog(path):
@@ -17,10 +19,10 @@ def open_catalog(path):
     db.row_factory = sqlite3.Row
     db.execute('PRAGMA foreign_keys=ON')
     version = db.execute('PRAGMA user_version').fetchone()[0]
-    if version not in (0, 1):
+    if version not in (0, 1, 2):
         db.close()
         raise ValueError(f'Unsupported schema version: {version}')
     db.executescript(SCHEMA)
-    db.execute('PRAGMA user_version=1')
+    db.execute('PRAGMA user_version=2')
     db.commit()
     return db

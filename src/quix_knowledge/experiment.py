@@ -7,7 +7,7 @@ import time
 from .evaluate import evaluate
 from .retrieve import search
 
-_TABLES = ('sources', 'sections', 'records', 'evidence', 'topic_links', 'role_annotations')
+_TABLES = ('sources', 'sections', 'section_pages', 'extraction_warnings', 'records', 'evidence', 'topic_links', 'role_annotations')
 _VARIANTS = ('baseline', 'topic', 'decision', 'role')
 
 

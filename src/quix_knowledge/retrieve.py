@@ -14,9 +14,14 @@ def search(db, query, variant='baseline', role=None, role_version=None, provider
     if context_chars is not None and context_chars < 0:
         raise ValueError('context_chars must be nonnegative')
     query_tokens = tokens(query)
-    rows = db.execute("SELECT sections.*,sources.path,sources.revision,sources.status AS source_status FROM sections JOIN sources ON sources.id=sections.source_id WHERE sources.status='current'").fetchall()
+    rows = db.execute("SELECT sections.*,sources.path,sources.revision,sources.status AS source_status,section_pages.page_start,section_pages.page_end FROM sections JOIN sources ON sources.id=sections.source_id LEFT JOIN section_pages ON sections.id=section_pages.section_id WHERE sources.status='current'").fetchall()
     results = []
     candidates = [dict(row, record_type='section', evidence=[], unsupported=False) for row in rows]
+    warning_pages = {}
+    for row in db.execute('SELECT source_id,page FROM extraction_warnings ORDER BY page'):
+        warning_pages.setdefault(row['source_id'],[]).append(row['page'])
+    for item in candidates:
+        item['source_warning_pages'] = warning_pages.get(item['source_id'],[])
     for record in db.execute("SELECT * FROM records WHERE status IN ('current','proposed')").fetchall():
         item = dict(record)
         refs = db.execute('SELECT evidence.section_id,sources.status FROM evidence JOIN sections ON sections.id=evidence.section_id JOIN sources ON sources.id=sections.source_id WHERE evidence.record_id=? ORDER BY evidence.section_id',(item['id'],)).fetchall()
