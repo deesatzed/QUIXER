@@ -93,3 +93,32 @@ def test_stale_index_entry_cannot_be_accepted(tmp_path):
     ingest(db,path)
     with pytest.raises(ValueError):
         review_generated_entry(db,entry,'accepted',reviewer='reviewer-1')
+
+def test_reverted_source_reproposes_stale_entry_for_fresh_review(tmp_path):
+    from quix_knowledge.indexing import review_generated_entry
+    db=open_catalog(':memory:')
+    path=tmp_path/'manual.txt'
+    path.write_text('Retry is allowed.')
+    index_source(db,path)
+    entry=db.execute('SELECT id FROM generated_index').fetchone()[0]
+    review_generated_entry(db,entry,'accepted',reviewer='reviewer-1')
+    path.write_text('Retry is not allowed.')
+    index_source(db,path)
+    path.write_text('Retry is allowed.')
+    index_source(db,path)
+    assert db.execute('SELECT status FROM generated_index WHERE id=?',(entry,)).fetchone()[0] == 'proposed'
+    assert db.execute('SELECT count(*) FROM generated_index_reviews WHERE entry_id=?',(entry,)).fetchone()[0] == 1
+
+def test_broad_existing_heading_gets_topic_level_proposals(tmp_path):
+    db=open_catalog(':memory:')
+    path=tmp_path/'manual.md'
+    path.write_text('# Operations\nRetries are bounded.\n\nAudit records track outcomes.\n\nRetention is seven days.')
+    result=index_source(db,path)
+    sections=db.execute('SELECT * FROM sections').fetchall()
+    assert len(sections) == 1
+    assert sections[0]['title'] == 'Operations'
+    assert sections[0]['generated'] == 0
+    entries=db.execute('SELECT title,status FROM generated_index ORDER BY start_offset').fetchall()
+    assert result['generated_entries'] == 3
+    assert any(row['title'] == 'Audit records track outcomes.' for row in entries)
+    assert all(row['status'] == 'proposed' for row in entries)

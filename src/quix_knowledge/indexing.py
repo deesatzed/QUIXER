@@ -28,7 +28,8 @@ def _propose_generated(db, section, provider, decision_budget):
     created = calls = 0
     for start, end in _paragraphs(section['body']):
         body = section['body'][start:end]
-        title = re.split(r'(?<=[.!?])\s|\n', body, maxsplit=1)[0].strip()[:120]
+        title_body = re.sub(r'^\s*#{1,6}\s+[^\n]*\n', '', body, count=1)
+        title = re.split(r'(?<=[.!?])\s|\n', title_body, maxsplit=1)[0].strip()[:120]
         if not title:
             continue
         entry_id = hashlib.sha256(f"index-v1:{section['id']}:{start}:{end}".encode()).hexdigest()
@@ -102,12 +103,16 @@ def index_source(db, path, provider=None, max_decisions=10):
             if existing['status'] == 'proposed' and existing['method'] == 'heading' and provider is not None and result['decision_calls'] < max_decisions:
                 assess_topic(db, section['id'], section['title'], provider, proposal_id=existing['id'])
                 result['decision_calls'] += 1
-            continue
-        result['topic_candidates'] += 1
-        if provider is not None and result['decision_calls'] < max_decisions:
-            assess_topic(db, section['id'], section['title'], provider)
-            result['decision_calls'] += 1
         else:
-            with db:
-                db.execute('INSERT INTO topic_links(section_id,topic,method,status) VALUES (?,?,?,?)', (section['id'], section['title'], 'heading', 'proposed'))
+            result['topic_candidates'] += 1
+            if provider is not None and result['decision_calls'] < max_decisions:
+                assess_topic(db, section['id'], section['title'], provider)
+                result['decision_calls'] += 1
+            else:
+                with db:
+                    db.execute('INSERT INTO topic_links(section_id,topic,method,status) VALUES (?,?,?,?)', (section['id'], section['title'], 'heading', 'proposed'))
+        if sum(1 for _ in _paragraphs(section['body'])) > 1:
+            created, calls = _propose_generated(db, section, provider, max_decisions-result['decision_calls'])
+            result['generated_entries'] += created
+            result['decision_calls'] += calls
     return result
