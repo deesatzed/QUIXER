@@ -21,7 +21,37 @@ def corpus_fingerprint(db):
     return digest.hexdigest()
 
 
-def run_experiment(db, tasks, *, provider=None, context_chars=4000, context_tokens=None, count_tokens=None, tokenizer_name=None, limit=10, label_provenance=None, configuration=None, include_proposed=False):
+def _indexing_receipts(db, receipt_ids):
+    if receipt_ids is None:
+        return None
+    if len(set(receipt_ids)) != len(receipt_ids):
+        raise ValueError('duplicate indexing receipt IDs')
+    receipts = []
+    for receipt_id in receipt_ids:
+        row = db.execute('SELECT * FROM decision_receipts WHERE id=?',(receipt_id,)).fetchone()
+        if row is None:
+            raise ValueError('missing indexing receipt')
+        receipt = dict(row)
+        detail = json.loads(receipt['detail'])
+        if 'source_id' in detail:
+            source = db.execute('SELECT status FROM sources WHERE id=?',(detail['source_id'],)).fetchone()
+        elif 'section_id' in detail:
+            source = db.execute('SELECT sources.status FROM sections JOIN sources ON sections.source_id=sources.id WHERE sections.id=?',(detail['section_id'],)).fetchone()
+        elif 'generated_index_id' in detail:
+            source = db.execute('SELECT sources.status FROM generated_index JOIN sections ON generated_index.section_id=sections.id JOIN sources ON sections.source_id=sources.id WHERE generated_index.id=?',(detail['generated_index_id'],)).fetchone()
+        else:
+            raise ValueError('receipt is not an indexing decision')
+        if source is None or source['status'] != 'current':
+            raise ValueError('indexing receipt does not refer to a current source')
+        receipts.append(receipt)
+    details = [json.loads(row['detail']) for row in receipts]
+    def total(key):
+        values = [(d.get('usage') or {}).get(key) for d in details]
+        return sum(values) if values and all(isinstance(v,(int,float)) and not isinstance(v,bool) and v >= 0 for v in values) else None
+    return {'decision_calls':len(receipts),'unknown_decisions':sum(r['outcome']=='unknown' for r in receipts),'reported_cost':total('cost'),'input_tokens':total('input_tokens'),'receipts':receipts}
+
+
+def run_experiment(db, tasks, *, provider=None, context_chars=4000, context_tokens=None, count_tokens=None, tokenizer_name=None, limit=10, label_provenance=None, configuration=None, include_proposed=False, indexing_receipt_ids=None):
     if not tasks or limit < 0 or (context_chars is not None and context_chars < 0):
         raise ValueError('tasks and nonnegative budgets are required')
     if context_tokens is not None and (context_chars is not None or context_tokens < 0 or count_tokens is None or not tokenizer_name):
@@ -34,6 +64,7 @@ def run_experiment(db, tasks, *, provider=None, context_chars=4000, context_toke
     if any(not isinstance(task.get('query'),str) or not task['query'].strip() for task in tasks):
         raise ValueError('each task needs a query')
     fingerprint = corpus_fingerprint(db)
+    indexing = _indexing_receipts(db,indexing_receipt_ids)
     labels = {t['id']:t.get('labels') for t in tasks}
     variants = {}
     for variant in _VARIANTS:
@@ -54,4 +85,4 @@ def run_experiment(db, tasks, *, provider=None, context_chars=4000, context_toke
         variants[variant] = {'metrics':evaluate(labels,results), 'queries':queries}
     if corpus_fingerprint(db) != fingerprint:
         raise RuntimeError('catalog changed during experiment')
-    return {'manifest':{'created_at':datetime.now(timezone.utc).isoformat(), 'corpus_revision':fingerprint, 'tasks':tasks, 'label_provenance':label_provenance, 'provider_configured':provider is not None, 'limit':limit, 'context_chars':context_chars, 'context_tokens':context_tokens, 'tokenizer':tokenizer_name, 'include_proposed':include_proposed, 'configuration':configuration}, 'variants':variants}
+    return {'manifest':{'created_at':datetime.now(timezone.utc).isoformat(), 'corpus_revision':fingerprint, 'tasks':tasks, 'label_provenance':label_provenance, 'provider_configured':provider is not None, 'limit':limit, 'context_chars':context_chars, 'context_tokens':context_tokens, 'tokenizer':tokenizer_name, 'include_proposed':include_proposed, 'indexing':indexing, 'configuration':configuration}, 'variants':variants}

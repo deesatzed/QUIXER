@@ -1,5 +1,6 @@
 """Validate provider responses; errors are unknown, never a negative judgment."""
 import json
+import math
 def judge(provider, state, question):
     try:
         result = provider(state, question)
@@ -26,4 +27,25 @@ def assess_topic(db, section_id, topic, provider, proposal_id=None):
             if updated.rowcount != 1:
                 raise ValueError('proposal no longer available')
         db.execute('INSERT INTO decision_receipts(provider,model,outcome,detail) VALUES (?,?,?,?)',(result.get('provider','unknown'),result.get('model'),result['outcome'],json.dumps({'section_id':section_id,'topic':topic,'reason':result.get('reason'),'probability':result.get('probability'),'usage':result.get('usage'),'request_id':result.get('request_id'),'thresholds':result.get('thresholds')})))
+    return result
+
+
+def assess_role(db, section_id, role, role_version, role_purpose, provider):
+    """Save a provisional role-usefulness estimate tied to a source revision."""
+    if not all(isinstance(value,str) and value.strip() for value in (role,role_version,role_purpose)):
+        raise ValueError('role, version and purpose are required')
+    section = db.execute("SELECT sections.title,sections.body,sources.revision FROM sections JOIN sources ON sources.id=sections.source_id WHERE sections.id=? AND sources.status='current'",(section_id,)).fetchone()
+    if section is None:
+        raise ValueError('section is not in a current source')
+    state = {'title':section['title'],'text':section['body'][:4000],'text_truncated':len(section['body'])>4000,'role':role,'role_version':role_version,'role_purpose':role_purpose}
+    result = judge(provider,state,'role usefulness')
+    score = result.get('probability')
+    valid = not isinstance(score,bool) and isinstance(score,(int,float)) and math.isfinite(score) and 0 <= score <= 1
+    if result['outcome'] != 'unknown' and not valid:
+        result = dict(result,outcome='unknown',reason='invalid role-usefulness probability')
+    detail = {'section_id':section_id,'source_revision':section['revision'],'question':'role usefulness','role':role,'role_version':role_version,'role_purpose':role_purpose,'probability':score if valid else None,'usage':result.get('usage'),'request_id':result.get('request_id'),'reason':result.get('reason')}
+    with db:
+        db.execute('INSERT INTO decision_receipts(provider,model,outcome,detail) VALUES (?,?,?,?)',(result.get('provider','unknown'),result.get('model'),result['outcome'],json.dumps(detail)))
+        if result['outcome'] != 'unknown' and valid:
+            db.execute('INSERT INTO role_annotations(section_id,role,role_version,score,method,model,source_revision,status) VALUES (?,?,?,?,?,?,?,?)',(section_id,role,role_version,score,'decision',result.get('model'),section['revision'],'proposed'))
     return result

@@ -64,3 +64,20 @@ def test_cli_can_list_and_review_generated_entries(tmp_path):
     subprocess.run([*base,'review-index',entry,'accepted','--reviewer','human-reviewer'],env=env,capture_output=True,text=True,check=True)
     listed=json.loads(subprocess.run([*base,'list-index'],env=env,capture_output=True,text=True,check=True).stdout)
     assert next(x for x in listed if x['id'] == entry)['status'] == 'accepted'
+
+def test_cli_experiment_accepts_saved_index_receipt_ids(tmp_path):
+    tasks=tmp_path/'tasks.json'
+    tasks.write_text(json.dumps([{'id':'q','query':'retry','labels':None}]))
+    receipts=tmp_path/'receipts.json'
+    receipts.write_text('[]')
+    env=dict(os.environ,PYTHONPATH=str(Path(__file__).resolve().parents[1]/'src'))
+    cmd=[sys.executable,'-m','quix_knowledge','--db',str(tmp_path/'db'),'experiment',str(tasks),'--indexing-receipts',str(receipts)]
+    report=json.loads(subprocess.run(cmd,env=env,capture_output=True,text=True,check=True).stdout)
+    assert report['manifest']['indexing']['decision_calls'] == 0
+
+def test_cli_role_assessment_requires_explicit_model_and_role_purpose(tmp_path):
+    env=dict(os.environ,PYTHONPATH=str(Path(__file__).resolve().parents[1]/'src'))
+    cmd=[sys.executable,'-m','quix_knowledge','--db',str(tmp_path/'db'),'assess-role','section','--role','reviewer','--role-version','1']
+    result=subprocess.run(cmd,env=env,capture_output=True,text=True)
+    assert result.returncode != 0
+    assert '--role-purpose' in result.stderr

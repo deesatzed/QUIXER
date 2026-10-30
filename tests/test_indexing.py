@@ -42,3 +42,24 @@ def test_candidates_created_offline_can_be_assessed_later(tmp_path):
     index_source(db, path, provider=provider, max_decisions=2)
     assert calls == ['structure usable', 'topic supported']
     assert db.execute('SELECT COUNT(*) FROM topic_links').fetchone()[0] == 1
+
+def test_indexing_reports_measured_usage_and_unknown_cost(tmp_path):
+    db=open_catalog(':memory:')
+    path=tmp_path/'doc.md'
+    path.write_text('# Retry\nRetries are bounded.')
+    def provider(state,question):
+        return {'outcome':'unclear','provider':'fixture','usage':{'cost':0.02,'input_tokens':7}}
+    result=index_source(db,path,provider=provider,max_decisions=2)
+    assert result['decision_calls'] == 2
+    assert result['reported_cost'] == 0.04
+    assert result['input_tokens'] == 14
+    assert result['elapsed_seconds'] >= 0
+    assert len(result['receipt_ids']) == 2
+
+    def missing_usage(state,question):
+        return {'outcome':'unclear','provider':'fixture'}
+    other=tmp_path/'other.md'
+    other.write_text('# Backoff\nUse a delay.')
+    result=index_source(db,other,provider=missing_usage,max_decisions=2)
+    assert result['reported_cost'] is None
+    assert result['input_tokens'] is None

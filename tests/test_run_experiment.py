@@ -51,3 +51,30 @@ def test_experiment_can_explicitly_include_provisional_index(tmp_path):
     assert report['manifest']['include_proposed'] is True
     assert any(r['record_type']=='generated_index' for r in report['variants']['topic']['queries']['q']['results'])
     assert not any(r['record_type']=='generated_index' for r in report['variants']['baseline']['queries']['q']['results'])
+
+def test_experiment_records_indexing_cost_as_separate_measurement(tmp_path):
+    from quix_knowledge.indexing import index_source
+    db=open_catalog(':memory:')
+    path=tmp_path/'doc.md'
+    path.write_text('# Retry\nRetry after delay.')
+    def provider(state,question):
+        return {'outcome':'unclear','provider':'fixture','usage':{'cost':0.01,'input_tokens':5}}
+    indexed=index_source(db,path,provider=provider,max_decisions=2)
+    report=run_experiment(db,[{'id':'q','query':'retry','labels':None}],indexing_receipt_ids=indexed['receipt_ids'])
+    indexing=report['manifest']['indexing']
+    assert indexing['decision_calls'] == 2
+    assert indexing['reported_cost'] == 0.02
+    assert indexing['input_tokens'] == 10
+    assert report['variants']['baseline']['queries']['q']['decision_calls'] == 0
+
+def test_experiment_rejects_receipts_for_superseded_source(tmp_path):
+    import pytest
+    from quix_knowledge.indexing import index_source
+    db=open_catalog(':memory:')
+    path=tmp_path/'doc.md'
+    path.write_text('# Retry\nRetry after delay.')
+    result=index_source(db,path,provider=lambda *args: {'outcome':'unclear','provider':'fixture'},max_decisions=1)
+    path.write_text('# Retry\nDo not retry.')
+    ingest(db,path)
+    with pytest.raises(ValueError,match='current source'):
+        run_experiment(db,[{'id':'q','query':'retry','labels':None}],indexing_receipt_ids=result['receipt_ids'])

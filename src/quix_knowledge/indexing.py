@@ -2,6 +2,7 @@
 import json
 import hashlib
 import re
+import time
 
 from .decisions import assess_topic, judge
 from .ingest import ingest
@@ -77,9 +78,11 @@ def review_generated_entry(db, entry_id, decision, reviewer):
 def index_source(db, path, provider=None, max_decisions=10):
     if max_decisions < 0:
         raise ValueError('max_decisions must be nonnegative')
+    started = time.monotonic()
+    before = db.execute('SELECT COALESCE(MAX(id),0) FROM decision_receipts').fetchone()[0]
     source_id = ingest(db, path)
     if source_id is None:
-        return {'source_id': None, 'structure_judgment': None, 'topic_candidates': 0, 'decision_calls': 0}
+        return {'source_id': None, 'structure_judgment': None, 'topic_candidates': 0, 'generated_entries': 0, 'decision_calls': 0, 'elapsed_seconds': time.monotonic()-started, 'receipt_ids': [], 'reported_cost': None, 'input_tokens': None}
     sections = db.execute('SELECT * FROM sections WHERE source_id=? ORDER BY start_line', (source_id,)).fetchall()
     result = {'source_id': source_id, 'structure_judgment': None, 'topic_candidates': 0, 'generated_entries': 0, 'decision_calls': 0}
     if provider is not None and max_decisions:
@@ -115,4 +118,10 @@ def index_source(db, path, provider=None, max_decisions=10):
             created, calls = _propose_generated(db, section, provider, max_decisions-result['decision_calls'])
             result['generated_entries'] += created
             result['decision_calls'] += calls
+    receipts = db.execute('SELECT id,detail FROM decision_receipts WHERE id>? ORDER BY id',(before,)).fetchall()
+    usage = [json.loads(row['detail']).get('usage') or {} for row in receipts]
+    def complete_sum(key):
+        values = [u.get(key) for u in usage]
+        return sum(values) if values and all(isinstance(value,(int,float)) and not isinstance(value,bool) for value in values) else None
+    result.update(elapsed_seconds=time.monotonic()-started,receipt_ids=[row['id'] for row in receipts],reported_cost=complete_sum('cost'),input_tokens=complete_sum('input_tokens'))
     return result

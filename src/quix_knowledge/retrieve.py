@@ -48,11 +48,14 @@ def search(db, query, variant='baseline', role=None, role_version=None, provider
         topic = len(query_tokens & tokens(' '.join(topics))) if variant != 'baseline' else 0
         if not lexical and not topic:
             continue
-        item.update(lexical_score=lexical,topic_score=topic,topics=topics,role_score=None,decision=None)
+        item.update(lexical_score=lexical,topic_score=topic,topics=topics,role_score=None,role_score_status=None,role_score_method=None,role_score_model=None,decision=None)
         if variant == 'role' and role and role_version:
-            annotation = db.execute(f"SELECT score FROM role_annotations WHERE {column}=? AND role=? AND role_version=? AND source_revision IS ? AND status IN ('accepted','proposed') ORDER BY id DESC LIMIT 1",(annotation_id,role,role_version,item['revision'])).fetchone()
+            annotation = db.execute(f"SELECT score,status,method,model FROM role_annotations WHERE {column}=? AND role=? AND role_version=? AND source_revision IS ? AND status IN ('accepted','proposed') ORDER BY id DESC LIMIT 1",(annotation_id,role,role_version,item['revision'])).fetchone()
             if annotation:
-                item['role_score'] = annotation[0]
+                item['role_score'] = annotation['score']
+                item['role_score_status'] = annotation['status']
+                item['role_score_method'] = annotation['method']
+                item['role_score_model'] = annotation['model']
         item['score'] = lexical + topic + (0.25 * item['role_score'] if item['role_score'] is not None else 0)
         results.append(item)
     results = sorted(results,key=lambda x:(-x['score'],x['id']))[:limit]

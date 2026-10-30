@@ -23,6 +23,13 @@ def main():
     review_index.add_argument('entry_id')
     review_index.add_argument('decision',choices=('accepted','rejected'))
     review_index.add_argument('--reviewer',required=True)
+    role_parser = sub.add_parser('assess-role')
+    role_parser.add_argument('section_id')
+    role_parser.add_argument('--role',required=True)
+    role_parser.add_argument('--role-version',required=True)
+    role_parser.add_argument('--role-purpose',required=True)
+    role_parser.add_argument('--env-file',required=True)
+    role_parser.add_argument('--model-slot',type=int,choices=(1,2,3,4),required=True)
     experiment_parser = sub.add_parser('experiment')
     experiment_parser.add_argument('tasks', help='JSON array of task records')
     exp_budget = experiment_parser.add_mutually_exclusive_group()
@@ -30,6 +37,7 @@ def main():
     exp_budget.add_argument('--context-tokens', type=int)
     experiment_parser.add_argument('--tokenizer')
     experiment_parser.add_argument('--include-proposed', action='store_true')
+    experiment_parser.add_argument('--indexing-receipts', help='JSON array of indexing receipt IDs from this catalog')
     experiment_parser.add_argument('--limit', type=int, default=10)
     experiment_parser.add_argument('--label-provenance')
     experiment_parser.add_argument('--env-file')
@@ -61,6 +69,13 @@ def main():
         parser.error('--context-tokens and --tokenizer must be provided together')
     db = open_catalog(args.db)
     try:
+        if args.command == 'assess-role':
+            from .decisions import assess_role
+            from .openrouter import load_settings, OpenRouterDecision
+            provider = OpenRouterDecision(load_settings(args.env_file,args.model_slot))
+            result = assess_role(db,args.section_id,args.role,args.role_version,args.role_purpose,provider)
+            print(json.dumps(result))
+            return 0 if result['outcome'] != 'unknown' else 1
         if args.command == 'list-index':
             query = 'SELECT g.*,s.path,s.revision,p.page_start,p.page_end FROM generated_index g JOIN sections x ON x.id=g.section_id JOIN sources s ON s.id=x.source_id LEFT JOIN section_pages p ON p.section_id=x.id'
             params = ()
@@ -94,13 +109,14 @@ def main():
                 from .openrouter import load_settings, OpenRouterDecision
                 provider = OpenRouterDecision(load_settings(args.env_file,args.model_slot))
             tasks = json.loads(Path(args.tasks).read_text(encoding='utf-8'))
+            indexing_receipts = json.loads(Path(args.indexing_receipts).read_text(encoding='utf-8')) if args.indexing_receipts else None
             count_tokens = None
             if args.tokenizer:
                 import tiktoken
                 encoding = tiktoken.get_encoding(args.tokenizer)
                 count_tokens = lambda text: len(encoding.encode_ordinary(text))
             context_chars = args.context_chars if args.context_chars is not None else (None if args.context_tokens is not None else 4000)
-            print(json.dumps(run_experiment(db,tasks,provider=provider,context_chars=context_chars,context_tokens=args.context_tokens,count_tokens=count_tokens,tokenizer_name=args.tokenizer,limit=args.limit,label_provenance=args.label_provenance,include_proposed=args.include_proposed)))
+            print(json.dumps(run_experiment(db,tasks,provider=provider,context_chars=context_chars,context_tokens=args.context_tokens,count_tokens=count_tokens,tokenizer_name=args.tokenizer,limit=args.limit,label_provenance=args.label_provenance,include_proposed=args.include_proposed,indexing_receipt_ids=indexing_receipts)))
             return 0
         provider = None
         if args.env_file:

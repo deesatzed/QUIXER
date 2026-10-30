@@ -45,7 +45,7 @@ class OpenRouterDecision:
         self.thresholds = thresholds
 
     def __call__(self, state, question):
-        questions = {'relevant':'Is the supplied text relevant to the query?', 'topic supported':'Does the supplied text substantively support the proposed topic?', 'structure usable':'Do the supplied section titles and text provide useful navigational structure for this document?'}
+        questions = {'relevant':'Is the supplied text relevant to the query?', 'topic supported':'Does the supplied text substantively support the proposed topic?', 'structure usable':'Do the supplied section titles and text provide useful navigational structure for this document?', 'role usefulness':'Would this text be useful for the supplied role and its defined purpose?'}
         if question not in questions:
             raise ValueError('unsupported decision question')
         payload = {'model':self.settings.model,'state':state,'questions':{'judgment':{'type':'noul','instructions':questions[question]}}}
