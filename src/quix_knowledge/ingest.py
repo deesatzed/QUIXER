@@ -25,6 +25,9 @@ def ingest(db, path):
     if not headings or headings[0][0] > 0:
         headings.insert(0,(0,'Unstructured text'))
     with db:
+        affected = "SELECT evidence.record_id FROM evidence JOIN sections ON sections.id=evidence.section_id JOIN sources ON sources.id=sections.source_id WHERE sources.path=? AND sources.status='current'"
+        db.execute(f"UPDATE topic_links SET status='stale' WHERE record_id IN ({affected})", (str(path),))
+        db.execute(f"UPDATE role_annotations SET status='stale' WHERE record_id IN ({affected})", (str(path),))
         db.execute("UPDATE topic_links SET status='stale' WHERE section_id IN (SELECT sections.id FROM sections JOIN sources ON sources.id=sections.source_id WHERE sources.path=? AND sources.status='current')",(str(path),))
         db.execute("UPDATE role_annotations SET status='stale' WHERE section_id IN (SELECT sections.id FROM sections JOIN sources ON sources.id=sections.source_id WHERE sources.path=? AND sources.status='current')",(str(path),))
         db.execute("UPDATE sources SET status='superseded' WHERE path=? AND status='current'",(str(path),))

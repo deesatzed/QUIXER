@@ -21,3 +21,10 @@ def test_cli_requires_both_env_file_and_slot_for_model(tmp_path):
     result = subprocess.run([sys.executable,'-m','quix_knowledge','--db',str(tmp_path/'db'),'search','retry','--variant','decision','--model-slot','2'],env=env,capture_output=True,text=True)
     assert result.returncode != 0
     assert '--env-file' in result.stderr
+
+def test_cli_index_creates_proposed_topic(tmp_path):
+    path = tmp_path/'doc.md'
+    path.write_text('# Retry policy\nRetry twice.\n')
+    env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1]/'src'))
+    result = subprocess.run([sys.executable,'-m','quix_knowledge','--db',str(tmp_path/'db'),'index',str(path)],env=env,capture_output=True,text=True,check=True)
+    assert json.loads(result.stdout)['topic_candidates'] == 1

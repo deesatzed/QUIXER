@@ -6,19 +6,23 @@ from .decisions import judge
 def tokens(text):
     return set(re.findall(r'[\w]+',text.lower()))
 
-def search(db, query, variant='baseline', role=None, role_version=None, provider=None, limit=10):
+def search(db, query, variant='baseline', role=None, role_version=None, provider=None, limit=10, context_chars=None):
     if variant not in {'baseline','topic','decision','role'}:
         raise ValueError('unknown retrieval variant')
     if limit < 0:
         raise ValueError('limit must be nonnegative')
+    if context_chars is not None and context_chars < 0:
+        raise ValueError('context_chars must be nonnegative')
     query_tokens = tokens(query)
     rows = db.execute("SELECT sections.*,sources.path,sources.revision,sources.status AS source_status FROM sections JOIN sources ON sources.id=sections.source_id WHERE sources.status='current'").fetchall()
     results = []
     candidates = [dict(row, record_type='section', evidence=[], unsupported=False) for row in rows]
     for record in db.execute("SELECT * FROM records WHERE status IN ('current','proposed')").fetchall():
         item = dict(record)
-        evidence = [r[0] for r in db.execute('SELECT section_id FROM evidence WHERE record_id=? ORDER BY section_id',(item['id'],))]
-        item.update(record_type='agent_record',title=item['kind'],path=None,revision=None,source_status=item['status'],evidence=evidence,unsupported=not evidence)
+        refs = db.execute('SELECT evidence.section_id,sources.status FROM evidence JOIN sections ON sections.id=evidence.section_id JOIN sources ON sources.id=sections.source_id WHERE evidence.record_id=? ORDER BY evidence.section_id',(item['id'],)).fetchall()
+        evidence = [r[0] for r in refs]
+        evidence_status = 'unsupported' if not refs else 'stale' if any(r[1] != 'current' for r in refs) else 'current'
+        item.update(record_type='agent_record',title=item['kind'],path=None,revision=None,source_status=item['status'],evidence=evidence,unsupported=not evidence,evidence_status=evidence_status)
         candidates.append(item)
     for item in candidates:
         lexical = len(query_tokens & tokens(item['title']+' '+item['body']))
@@ -37,9 +41,22 @@ def search(db, query, variant='baseline', role=None, role_version=None, provider
     results = sorted(results,key=lambda x:(-x['score'],x['id']))[:limit]
     if variant in {'decision','role'} and provider is not None:
         for item in results:
-            item['decision'] = judge(provider, {'query':query,'title':item['title'],'text':item['body']}, 'relevant')
+            item['decision'] = judge(provider, {'query':query,'title':item['title'],'text':item['body'][:4000], 'text_truncated':len(item['body']) > 4000}, 'relevant')
             decision = item['decision']
             item['score'] += {'supported':0.1,'unsuitable':-0.1}.get(decision['outcome'],0)
             db.execute('INSERT INTO decision_receipts(provider,model,outcome,detail) VALUES (?,?,?,?)',(decision.get('provider','unknown'),decision.get('model'),decision['outcome'],json.dumps({'item_id':item['id'],'query':query,'reason':decision.get('reason'),'probability':decision.get('probability'),'usage':decision.get('usage'),'request_id':decision.get('request_id'),'thresholds':decision.get('thresholds')})))
     db.commit()
-    return sorted(results,key=lambda x:(-x['score'],x['id']))
+    results = sorted(results,key=lambda x:(-x['score'],x['id']))
+    if context_chars is not None:
+        remaining = context_chars
+        bounded = []
+        for item in results:
+            if remaining <= 0:
+                break
+            original = item['body']
+            item['body'] = original[:remaining]
+            item['context_truncated'] = len(item['body']) < len(original)
+            remaining -= len(item['body'])
+            bounded.append(item)
+        return bounded
+    return results

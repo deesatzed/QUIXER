@@ -59,3 +59,32 @@ def test_decision_call_count_respects_candidate_budget(tmp_path):
         return {'outcome':'unclear','provider':'fake'}
     assert len(search(db,'retry',variant='decision',provider=provider,limit=1)) == 1
     assert len(calls) == 1
+
+def test_changed_source_marks_finding_evidence_and_annotations_stale(tmp_path):
+    db = open_catalog(':memory:')
+    path = tmp_path / 'spec.md'
+    path.write_text('# Retry\nOld retry behavior.')
+    ingest(db, path)
+    section = db.execute('SELECT id FROM sections').fetchone()[0]
+    add_record(db, 'finding', 'finding', 'Retry is allowed', 'reviewer', evidence=[section])
+    db.execute("INSERT INTO topic_links(record_id,topic,method,status) VALUES ('finding','retry','manual','accepted')")
+    db.execute("INSERT INTO role_annotations(record_id,role,role_version,score,method,status) VALUES ('finding','reviewer','1',1,'manual','accepted')")
+    db.commit()
+    path.write_text('# Retry\nRetry is prohibited.')
+    ingest(db, path)
+    finding = next(item for item in search(db, 'retry') if item['id'] == 'finding')
+    assert finding['evidence_status'] == 'stale'
+    assert finding['evidence'] == [section]
+    assert db.execute("SELECT status FROM topic_links WHERE record_id='finding'").fetchone()[0] == 'stale'
+    assert db.execute("SELECT status FROM role_annotations WHERE record_id='finding'").fetchone()[0] == 'stale'
+
+def test_context_budget_limits_text_without_destroying_anchors(tmp_path):
+    db = open_catalog(':memory:')
+    path = tmp_path / 'doc.md'
+    path.write_text('# Retry\nRetry with backoff and jitter.\n# Other\nRetry with timeout.\n')
+    ingest(db, path)
+    results = search(db, 'retry', context_chars=12)
+    assert sum(len(row['body']) for row in results) <= 12
+    assert results[0]['context_truncated'] is True
+    assert results[0]['start_line'] in (1, 3)
+    assert results[0]['path'] == str(path.resolve())
