@@ -40,6 +40,32 @@ def test_experiment_records_common_token_budget(tmp_path):
     for variant in report['variants'].values():
         assert variant['queries']['q']['returned_body_tokens'] <= 2
 
+def test_experiment_compares_full_context_packets_under_same_budget(tmp_path):
+    import json
+    db=open_catalog(':memory:')
+    path=tmp_path/'doc.md'
+    path.write_text('# Retry\n'+'retry '*80)
+    ingest(db,path)
+    tasks=[{'id':'q','query':'retry','role':'reviewer','role_version':'1','labels':None}]
+    report=run_experiment(db,tasks,context_chars=None,packet_tokens=400,count_tokens=len,tokenizer_name='fixture-chars')
+    assert report['manifest']['packet_tokens'] == 400
+    for variant in report['variants'].values():
+        query=variant['queries']['q']
+        packet=query['context_packet']
+        serialized=json.dumps(packet,ensure_ascii=False,sort_keys=True,separators=(',',':'))
+        assert len(serialized) <= 400
+        assert query['packet_token_count'] == len(serialized)
+        assert query['results'] == packet['results']
+
+def test_experiment_records_provider_policy_without_credentials(tmp_path):
+    from quix_knowledge.openrouter import OpenRouterDecision,Settings
+    db=open_catalog(':memory:')
+    provider=OpenRouterDecision(Settings('never-log-this-key','fixture-model'),transport=lambda *args:{'answers':{'judgment':{'type':'noul','noul':0.5}}},thresholds=(0.2,0.8))
+    report=run_experiment(db,[{'id':'q','query':'retry','labels':None}],provider=provider)
+    assert report['manifest']['provider']['configured_model'] == 'fixture-model'
+    assert report['manifest']['provider']['thresholds'] == (0.2,0.8)
+    assert 'never-log-this-key' not in str(report)
+
 def test_experiment_can_explicitly_include_provisional_index(tmp_path):
     from quix_knowledge.indexing import index_source
     db=open_catalog(':memory:')

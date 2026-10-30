@@ -46,6 +46,7 @@ def main():
     exp_budget = experiment_parser.add_mutually_exclusive_group()
     exp_budget.add_argument('--context-chars', type=int)
     exp_budget.add_argument('--context-tokens', type=int)
+    exp_budget.add_argument('--packet-tokens', type=int)
     experiment_parser.add_argument('--tokenizer')
     experiment_parser.add_argument('--include-proposed', action='store_true')
     experiment_parser.add_argument('--indexing-receipts', help='JSON array of indexing receipt IDs from this catalog')
@@ -65,20 +66,36 @@ def main():
     search_parser.add_argument('--include-proposed', action='store_true')
     search_parser.add_argument('--env-file')
     search_parser.add_argument('--model-slot', type=int, choices=(1,2,3,4))
-    for provider_parser in (index_parser, role_parser, record_topic_parser, experiment_parser, search_parser):
+    context_parser = sub.add_parser('context')
+    context_parser.add_argument('task')
+    context_parser.add_argument('--role',required=True)
+    context_parser.add_argument('--role-version',required=True)
+    context_parser.add_argument('--budget',type=int,required=True)
+    context_parser.add_argument('--tokenizer',required=True)
+    context_parser.add_argument('--variant',choices=('baseline','topic','decision','role'),default='role')
+    context_parser.add_argument('--limit',type=int,default=10)
+    context_parser.add_argument('--include-proposed',action='store_true')
+    context_parser.add_argument('--env-file')
+    context_parser.add_argument('--model-slot',type=int,choices=(1,2,3,4))
+    for provider_parser in (index_parser, role_parser, record_topic_parser, experiment_parser, search_parser, context_parser):
         provider_parser.add_argument('--jev-url',help='HTTP loopback JevEdge0 workbench origin')
         provider_parser.add_argument('--stability-trials',type=int,default=1)
+        provider_parser.add_argument('--thresholds',type=float,nargs=2,metavar=('LOW','HIGH'),help='explicit experimental decision thresholds')
     args = parser.parse_args()
-    if args.command in ('index','assess-role','assess-record-topic','experiment','search'):
+    if args.command in ('index','assess-role','assess-record-topic','experiment','search','context'):
         if bool(args.env_file) != bool(args.model_slot):
             parser.error('--env-file and --model-slot must be provided together')
         if args.jev_url and args.env_file:
             parser.error('choose one decision provider')
+        if args.thresholds and not (args.jev_url or args.env_file):
+            parser.error('thresholds require a decision provider')
+        if args.thresholds and not 0 <= args.thresholds[0] < args.thresholds[1] <= 1:
+            parser.error('thresholds must satisfy 0 <= LOW < HIGH <= 1')
         if args.command in ('assess-role','assess-record-topic') and not (args.jev_url or args.env_file):
             parser.error(f'{args.command} requires a decision provider')
-    if args.command == 'experiment' and bool(args.tokenizer) != (args.context_tokens is not None):
-        parser.error('--context-tokens and --tokenizer must be provided together')
-    if args.command == 'search' and (args.env_file or args.jev_url) and args.variant not in ('decision','role'):
+    if args.command == 'experiment' and bool(args.tokenizer) != (args.context_tokens is not None or args.packet_tokens is not None):
+        parser.error('--context-tokens or --packet-tokens and --tokenizer must be provided together')
+    if args.command in ('search','context') and (args.env_file or args.jev_url) and args.variant not in ('decision','role'):
         parser.error('a model requires the decision or role variant')
     if args.command == 'search' and bool(args.tokenizer) != (args.context_tokens is not None):
         parser.error('--context-tokens and --tokenizer must be provided together')
@@ -87,16 +104,30 @@ def main():
         def configured_provider():
             if args.jev_url:
                 from .jevedge import JevEdgeDecision
-                return JevEdgeDecision(args.jev_url,stability_trials=args.stability_trials)
+                return JevEdgeDecision(args.jev_url,stability_trials=args.stability_trials,thresholds=args.thresholds)
             if args.env_file:
                 from .openrouter import load_settings, OpenRouterDecision
-                return OpenRouterDecision(load_settings(args.env_file,args.model_slot))
+                return OpenRouterDecision(load_settings(args.env_file,args.model_slot),thresholds=args.thresholds)
             return None
         if args.command == 'assess-record-topic':
             from .decisions import assess_record_topic
             result = assess_record_topic(db,args.record_id,args.topic,configured_provider())
             print(json.dumps(result))
             return 0 if result['outcome'] != 'unknown' else 1
+        if args.command == 'context':
+            import tiktoken
+            from .context import build_context_packet, serialize_packet
+            from .experiment import corpus_fingerprint
+            encoding = tiktoken.get_encoding(args.tokenizer)
+            before = corpus_fingerprint(db)
+            count_tokens = lambda text:len(encoding.encode_ordinary(text))
+            build_context_packet(args.task,args.role,args.role_version,[],budget=args.budget,count_tokens=count_tokens,tokenizer_name=args.tokenizer,catalog_fingerprint=before)
+            rows = search(db,args.task,variant=args.variant,role=args.role,role_version=args.role_version,provider=configured_provider(),limit=args.limit,include_proposed=args.include_proposed)
+            if corpus_fingerprint(db) != before:
+                raise RuntimeError('catalog changed while preparing context')
+            packet = build_context_packet(args.task,args.role,args.role_version,rows,budget=args.budget,count_tokens=count_tokens,tokenizer_name=args.tokenizer,catalog_fingerprint=before)
+            print(serialize_packet(packet))
+            return 0
         if args.command == 'list-topics':
             query = 'SELECT t.*,s.path,s.revision,x.title AS section_title FROM topic_links t LEFT JOIN sections x ON x.id=t.section_id LEFT JOIN sources s ON s.id=x.source_id'
             params = ()
@@ -149,8 +180,8 @@ def main():
                 import tiktoken
                 encoding = tiktoken.get_encoding(args.tokenizer)
                 count_tokens = lambda text: len(encoding.encode_ordinary(text))
-            context_chars = args.context_chars if args.context_chars is not None else (None if args.context_tokens is not None else 4000)
-            print(json.dumps(run_experiment(db,tasks,provider=provider,context_chars=context_chars,context_tokens=args.context_tokens,count_tokens=count_tokens,tokenizer_name=args.tokenizer,limit=args.limit,label_provenance=args.label_provenance,include_proposed=args.include_proposed,indexing_receipt_ids=indexing_receipts)))
+            context_chars = args.context_chars if args.context_chars is not None else (None if args.context_tokens is not None or args.packet_tokens is not None else 4000)
+            print(json.dumps(run_experiment(db,tasks,provider=provider,context_chars=context_chars,context_tokens=args.context_tokens,packet_tokens=args.packet_tokens,count_tokens=count_tokens,tokenizer_name=args.tokenizer,limit=args.limit,label_provenance=args.label_provenance,include_proposed=args.include_proposed,indexing_receipt_ids=indexing_receipts)))
             return 0
         provider = configured_provider()
         count_tokens = None

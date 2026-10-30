@@ -18,6 +18,7 @@ def _transport(request, timeout):
 
 
 class JevEdgeDecision:
+    prompt_version = 'quix-jevedge-choice-v1'
     def __init__(self, base_url='http://127.0.0.1:8090', *, transport=_transport, timeout=30, stability_trials=1, thresholds=None):
         parsed = urlsplit(base_url)
         host = parsed.hostname or ''
@@ -57,4 +58,4 @@ class JevEdgeDecision:
             outcome = 'unsuitable' if scores['yes'] <= low else 'supported' if scores['yes'] >= high else 'unclear'
         model = data.get('model')
         model_name = model.get('name') if isinstance(model,dict) else None
-        return {'provider':'jevedge0','model':model_name,'outcome':outcome,'probability':scores['yes'],'probability_status':'conditional_option_score_uncalibrated','legal_mass':legal_mass,'stability':stability,'thresholds':self.thresholds}
+        return {'provider':'jevedge0','model':model_name,'outcome':outcome,'probability':scores['yes'],'probability_status':'conditional_option_score_uncalibrated','legal_mass':legal_mass,'stability':stability,'thresholds':self.thresholds,'prompt_version':self.prompt_version}

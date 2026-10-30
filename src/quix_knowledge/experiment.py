@@ -54,18 +54,22 @@ def _indexing_receipts(db, receipt_ids):
     return {'decision_calls':len(receipts),'unknown_decisions':sum(r['outcome']=='unknown' for r in receipts),'reported_cost':total('cost'),'input_tokens':total('input_tokens'),'receipts':receipts}
 
 
-def run_experiment(db, tasks, *, provider=None, context_chars=4000, context_tokens=None, count_tokens=None, tokenizer_name=None, limit=10, label_provenance=None, configuration=None, include_proposed=False, indexing_receipt_ids=None):
+def run_experiment(db, tasks, *, provider=None, context_chars=4000, context_tokens=None, packet_tokens=None, count_tokens=None, tokenizer_name=None, limit=10, label_provenance=None, configuration=None, include_proposed=False, indexing_receipt_ids=None):
     if not tasks or limit < 0 or (context_chars is not None and context_chars < 0):
         raise ValueError('tasks and nonnegative budgets are required')
     if context_tokens is not None and (context_chars is not None or context_tokens < 0 or count_tokens is None or not tokenizer_name):
         raise ValueError('token budget requires a named counter and excludes character budget')
-    if context_tokens is None and context_chars is None:
+    if packet_tokens is not None and (context_chars is not None or context_tokens is not None or packet_tokens < 0 or count_tokens is None or not tokenizer_name):
+        raise ValueError('packet token budget requires a named counter and excludes other budgets')
+    if context_tokens is None and context_chars is None and packet_tokens is None:
         raise ValueError('a context budget is required')
     ids = [task.get('id') for task in tasks]
     if any(not isinstance(i,str) or not i for i in ids) or len(set(ids)) != len(ids):
         raise ValueError('task IDs must be nonempty and unique')
     if any(not isinstance(task.get('query'),str) or not task['query'].strip() for task in tasks):
         raise ValueError('each task needs a query')
+    if packet_tokens is not None and any(not isinstance(t.get('role'),str) or not t['role'].strip() or not isinstance(t.get('role_version'),str) or not t['role_version'].strip() for t in tasks):
+        raise ValueError('packet tasks require role and role_version')
     if any(t.get('labels') is not None and (not isinstance(t['labels'],list) or any(not isinstance(x,str) or not x for x in t['labels'])) for t in tasks):
         raise ValueError('labels must be null or a list of nonempty IDs')
     if any(t.get('split','unassigned') not in ('train','development','held_out','unassigned') for t in tasks):
@@ -87,13 +91,20 @@ def run_experiment(db, tasks, *, provider=None, context_chars=4000, context_toke
             previous = db.execute('SELECT COALESCE(MAX(id),0) FROM decision_receipts').fetchone()[0]
             started = time.monotonic()
             rows = search(db, task['query'], variant=variant, role=task.get('role'), role_version=task.get('role_version'), provider=provider, limit=limit, context_chars=context_chars, context_tokens=context_tokens,count_tokens=count_tokens,include_proposed=include_proposed)
+            packet = None
+            packet_count = None
+            if packet_tokens is not None:
+                from .context import build_context_packet, serialize_packet
+                packet = build_context_packet(task['query'],task['role'],task['role_version'],rows,budget=packet_tokens,count_tokens=count_tokens,tokenizer_name=tokenizer_name,catalog_fingerprint=fingerprint)
+                packet_count = count_tokens(serialize_packet(packet))
+                rows = packet['results']
             elapsed = time.monotonic() - started
             receipts = [dict(row) for row in db.execute('SELECT * FROM decision_receipts WHERE id>? ORDER BY id',(previous,))]
             details = [json.loads(r['detail']) for r in receipts]
             costs = [(d.get('usage') or {}).get('cost') for d in details]
             cost = sum(costs) if costs and all(isinstance(x,(int,float)) and not isinstance(x,bool) for x in costs) else None
             results[task['id']] = rows
-            queries[task['id']] = {'elapsed_seconds': elapsed, 'decision_calls':len(receipts), 'decision_failures':sum(r['outcome']=='unknown' for r in receipts), 'reported_cost':cost, 'returned_body_chars':sum(len(r['body']) for r in rows), 'returned_body_tokens':sum(r['context_token_count'] for r in rows) if context_tokens is not None else None, 'missing_label_ids':missing.get(task['id'],[]), 'receipts':receipts, 'results':rows}
+            queries[task['id']] = {'elapsed_seconds': elapsed, 'decision_calls':len(receipts), 'decision_failures':sum(r['outcome']=='unknown' for r in receipts), 'reported_cost':cost, 'returned_body_chars':sum(len(r['body']) for r in rows), 'returned_body_tokens':sum(count_tokens(r['body']) for r in rows) if context_tokens is not None or packet_tokens is not None else None, 'packet_token_count':packet_count,'context_packet':packet, 'missing_label_ids':missing.get(task['id'],[]), 'receipts':receipts, 'results':rows}
         by_split = {}
         for split in sorted({task.get('split','unassigned') for task in tasks}):
             split_ids = {task['id'] for task in tasks if task.get('split','unassigned') == split}
@@ -101,4 +112,7 @@ def run_experiment(db, tasks, *, provider=None, context_chars=4000, context_toke
         variants[variant] = {'metrics':evaluate(labels,results,missing), 'metrics_by_split':by_split, 'queries':queries}
     if corpus_fingerprint(db) != fingerprint:
         raise RuntimeError('catalog changed during experiment')
-    return {'manifest':{'created_at':datetime.now(timezone.utc).isoformat(), 'corpus_revision':fingerprint, 'tasks':tasks, 'label_provenance':label_provenance, 'provider_configured':provider is not None, 'limit':limit, 'context_chars':context_chars, 'context_tokens':context_tokens, 'tokenizer':tokenizer_name, 'include_proposed':include_proposed, 'indexing':indexing, 'configuration':configuration}, 'variants':variants}
+    provider_info = None
+    if provider is not None:
+        provider_info = {'adapter':type(provider).__name__,'configured_model':getattr(getattr(provider,'settings',None),'model',None),'thresholds':getattr(provider,'thresholds',None),'prompt_version':getattr(provider,'prompt_version',None),'stability_trials':getattr(provider,'trials',None)}
+    return {'manifest':{'created_at':datetime.now(timezone.utc).isoformat(), 'corpus_revision':fingerprint, 'tasks':tasks, 'label_provenance':label_provenance, 'provider_configured':provider is not None, 'provider':provider_info, 'limit':limit, 'context_chars':context_chars, 'context_tokens':context_tokens, 'packet_tokens':packet_tokens, 'tokenizer':tokenizer_name, 'include_proposed':include_proposed, 'indexing':indexing, 'configuration':configuration}, 'variants':variants}

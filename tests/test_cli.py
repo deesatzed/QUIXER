@@ -107,3 +107,24 @@ def test_cli_record_topic_requires_provider_configuration(tmp_path):
     result=subprocess.run(cmd,env=env,capture_output=True,text=True)
     assert result.returncode != 0
     assert 'requires a decision provider' in result.stderr
+
+def test_cli_context_includes_metadata_in_named_token_budget(tmp_path):
+    import pytest
+    tiktoken=pytest.importorskip('tiktoken')
+    path=tmp_path/'doc.md'
+    path.write_text('# Retry\nRetry after failure and record the result.')
+    env=dict(os.environ,PYTHONPATH=str(Path(__file__).resolve().parents[1]/'src'))
+    base=[sys.executable,'-m','quix_knowledge','--db',str(tmp_path/'db')]
+    subprocess.run([*base,'ingest',str(path)],env=env,capture_output=True,text=True,check=True)
+    result=subprocess.run([*base,'context','retry','--role','reviewer','--role-version','1','--budget','250','--tokenizer','cl100k_base'],env=env,capture_output=True,text=True,check=True)
+    packet=json.loads(result.stdout)
+    serialized=json.dumps(packet,ensure_ascii=False,sort_keys=True,separators=(',',':'))
+    assert len(tiktoken.get_encoding('cl100k_base').encode_ordinary(serialized)) <= 250
+    assert packet['catalog_fingerprint']
+
+def test_cli_refuses_thresholds_without_provider(tmp_path):
+    env=dict(os.environ,PYTHONPATH=str(Path(__file__).resolve().parents[1]/'src'))
+    cmd=[sys.executable,'-m','quix_knowledge','--db',str(tmp_path/'db'),'search','retry','--variant','decision','--thresholds','0.2','0.8']
+    result=subprocess.run(cmd,env=env,capture_output=True,text=True)
+    assert result.returncode != 0
+    assert 'thresholds require a decision provider' in result.stderr

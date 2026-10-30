@@ -1,10 +1,11 @@
 """Validate provider responses; errors are unknown, never a negative judgment."""
 import json
 import math
+from .store import validate_retrievable_ids
 
 def decision_metadata(result):
     """Retain score semantics and usage without storing authentication data."""
-    keys = ('probability','probability_status','legal_mass','stability','usage','request_id','thresholds','reason')
+    keys = ('probability','probability_status','legal_mass','stability','usage','request_id','thresholds','prompt_version','reason')
     return {key:result.get(key) for key in keys}
 
 def judge(provider, state, question):
@@ -64,16 +65,22 @@ def assess_record_topic(db, record_id, topic, provider):
 
 
 def assess_role(db, section_id, role, role_version, role_purpose, provider):
-    """Save a provisional role-usefulness estimate for a section or generated entry."""
+    """Save a provisional usefulness estimate for a source unit or agent record."""
     if not all(isinstance(value,str) and value.strip() for value in (role,role_version,role_purpose)):
         raise ValueError('role, version and purpose are required')
+    validate_retrievable_ids(db)
     section = db.execute("SELECT sections.title,sections.body,sources.revision FROM sections JOIN sources ON sources.id=sections.source_id WHERE sections.id=? AND sources.status='current'",(section_id,)).fetchone()
-    is_generated = False
+    target_type = 'section'
     if section is None:
         section = db.execute("SELECT generated_index.title,generated_index.body,sources.revision FROM generated_index JOIN sections ON sections.id=generated_index.section_id JOIN sources ON sources.id=sections.source_id WHERE generated_index.id=? AND generated_index.status IN ('proposed','accepted') AND sources.status='current'",(section_id,)).fetchone()
-        is_generated = True
+        target_type = 'generated_index'
     if section is None:
-        raise ValueError('section or index entry is not in a current source')
+        section = db.execute("""SELECT r.kind AS title,r.body,NULL AS revision FROM records r WHERE r.id=? AND r.status IN ('proposed','current') AND NOT EXISTS
+            (SELECT 1 FROM evidence e JOIN sections s ON s.id=e.section_id JOIN sources x ON x.id=s.source_id WHERE e.record_id=r.id AND x.status != 'current')""",(section_id,)).fetchone()
+        target_type = 'record'
+    if section is None:
+        raise ValueError('target is not current or its evidence is stale')
+    evidence_before = tuple(row[0] for row in db.execute('SELECT section_id FROM evidence WHERE record_id=? ORDER BY section_id',(section_id,))) if target_type == 'record' else ()
     state = {'title':section['title'],'text':section['body'][:4000],'text_truncated':len(section['body'])>4000,'role':role,'role_version':role_version,'role_purpose':role_purpose}
     result = judge(provider,state,'role usefulness')
     score = result.get('probability')
@@ -81,18 +88,25 @@ def assess_role(db, section_id, role, role_version, role_purpose, provider):
     if result['outcome'] != 'unknown' and not valid:
         result = dict(result,outcome='unknown',reason='invalid role-usefulness probability',probability=None)
     with db:
-        if is_generated:
+        if target_type == 'generated_index':
             current = db.execute("SELECT 1 FROM generated_index JOIN sections ON sections.id=generated_index.section_id JOIN sources ON sources.id=sections.source_id WHERE generated_index.id=? AND generated_index.status IN ('proposed','accepted') AND sources.status='current' AND sources.revision=?",(section_id,section['revision'])).fetchone()
-        else:
+        elif target_type == 'section':
             current = db.execute("SELECT 1 FROM sections JOIN sources ON sources.id=sections.source_id WHERE sections.id=? AND sources.status='current' AND sources.revision=?",(section_id,section['revision'])).fetchone()
+        else:
+            current = db.execute("""SELECT 1 FROM records r WHERE r.id=? AND r.body=? AND r.status IN ('proposed','current') AND NOT EXISTS
+                (SELECT 1 FROM evidence e JOIN sections s ON s.id=e.section_id JOIN sources x ON x.id=s.source_id WHERE e.record_id=r.id AND x.status != 'current')""",(section_id,section['body'])).fetchone()
+            evidence_after = tuple(row[0] for row in db.execute('SELECT section_id FROM evidence WHERE record_id=? ORDER BY section_id',(section_id,)))
+            if evidence_before != evidence_after:
+                current = None
         if current is None:
             result = dict(result,outcome='unknown',reason='source changed during decision')
-        detail = {('generated_index_id' if is_generated else 'section_id'):section_id,'source_revision':section['revision'],'question':'role usefulness','role':role,'role_version':role_version,'role_purpose':role_purpose,**decision_metadata(result)}
+        detail = {('generated_index_id' if target_type == 'generated_index' else 'record_id' if target_type == 'record' else 'section_id'):section_id,'source_revision':section['revision'],'question':'role usefulness','role':role,'role_version':role_version,'role_purpose':role_purpose,**decision_metadata(result)}
         detail['probability'] = score if valid else None
         db.execute('INSERT INTO decision_receipts(provider,model,outcome,detail) VALUES (?,?,?,?)',(result.get('provider','unknown'),result.get('model'),result['outcome'],json.dumps(detail)))
         if result['outcome'] != 'unknown' and valid:
-            if is_generated:
+            if target_type == 'generated_index':
                 db.execute('INSERT INTO index_role_annotations(entry_id,role,role_version,score,method,model,source_revision,status) VALUES (?,?,?,?,?,?,?,?)',(section_id,role,role_version,score,'decision',result.get('model'),section['revision'],'proposed'))
             else:
-                db.execute('INSERT INTO role_annotations(section_id,role,role_version,score,method,model,source_revision,status) VALUES (?,?,?,?,?,?,?,?)',(section_id,role,role_version,score,'decision',result.get('model'),section['revision'],'proposed'))
+                column = 'record_id' if target_type == 'record' else 'section_id'
+                db.execute(f'INSERT INTO role_annotations({column},role,role_version,score,method,model,source_revision,status) VALUES (?,?,?,?,?,?,?,?)',(section_id,role,role_version,score,'decision',result.get('model'),section['revision'],'proposed'))
     return result

@@ -3,6 +3,8 @@ def add_record(db, id, kind, body, producer, evidence=(), output_ref=None, super
     if kind == 'test_result' and not output_ref:
         raise ValueError('test results require an output reference')
     with db:
+        if db.execute('SELECT 1 FROM sections WHERE id=? UNION ALL SELECT 1 FROM generated_index WHERE id=?',(id,id)).fetchone():
+            raise ValueError('ambiguous catalog ID across record types')
         db.execute('INSERT INTO records(id,kind,body,producer,supersedes,output_ref) VALUES (?,?,?,?,?,?)',(id,kind,body,producer,supersedes,output_ref))
         db.executemany('INSERT INTO evidence VALUES (?,?)',[(id,section) for section in evidence])
         if supersedes:

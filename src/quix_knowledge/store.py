@@ -30,3 +30,11 @@ def open_catalog(path):
     db.execute('PRAGMA user_version=5')
     db.commit()
     return db
+
+def validate_retrievable_ids(db):
+    """Reject cross-type identity collisions before resolving or comparing results."""
+    collision = db.execute("""SELECT id FROM (
+        SELECT id FROM sections UNION ALL SELECT id FROM generated_index UNION ALL SELECT id FROM records
+    ) GROUP BY id HAVING count(*) > 1 LIMIT 1""").fetchone()
+    if collision is not None:
+        raise ValueError('ambiguous catalog ID across record types')

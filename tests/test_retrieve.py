@@ -189,3 +189,14 @@ def test_source_removed_during_decision_never_returns_old_section(tmp_path):
         return {'outcome':'supported','provider':'fixture'}
     assert search(db,'retry',variant='decision',provider=provider) == []
     assert db.execute('SELECT outcome FROM decision_receipts').fetchone()[0] == 'unknown'
+
+def test_ambiguous_record_and_section_ids_are_rejected(tmp_path):
+    import pytest
+    db=open_catalog(':memory:')
+    path=tmp_path/'doc.md'
+    path.write_text('# Retry\nRetry is allowed.')
+    ingest(db,path)
+    section=db.execute('SELECT id FROM sections').fetchone()[0]
+    db.execute("INSERT INTO records(id,kind,body,producer) VALUES (?,'finding','retry','agent')",(section,))
+    with pytest.raises(ValueError,match='ambiguous'):
+        search(db,'retry')

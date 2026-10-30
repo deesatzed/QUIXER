@@ -2,6 +2,7 @@
 import re
 import json
 from .decisions import judge, decision_metadata
+from .store import validate_retrievable_ids
 
 def tokens(text):
     return set(re.findall(r'[\w]+',text.lower()))
@@ -17,6 +18,7 @@ def _singular_tokens(text):
     return result
 
 def search(db, query, variant='baseline', role=None, role_version=None, provider=None, limit=10, context_chars=None, include_proposed=False, context_tokens=None, count_tokens=None):
+    validate_retrievable_ids(db)
     if variant not in {'baseline','topic','decision','role'}:
         raise ValueError('unknown retrieval variant')
     if limit < 0:

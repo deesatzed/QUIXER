@@ -38,6 +38,7 @@ def _request(request, timeout):
         return json.load(response)
 
 class OpenRouterDecision:
+    prompt_version = 'quix-openrouter-noul-v1'
     def __init__(self, settings, transport=_request, timeout=30, thresholds=None):
         if thresholds is not None and (len(thresholds) != 2 or not 0 <= thresholds[0] < thresholds[1] <= 1):
             raise ValueError('thresholds must satisfy 0 <= low < high <= 1')
@@ -59,4 +60,4 @@ class OpenRouterDecision:
         if self.thresholds is not None:
             low, high = self.thresholds
             outcome = 'unsuitable' if probability <= low else 'supported' if probability >= high else 'unclear'
-        return {'outcome':outcome,'provider':'openrouter','model':data.get('model',self.settings.model),'probability':probability,'usage':data.get('usage'), 'request_id':data.get('id'),'thresholds':self.thresholds}
+        return {'outcome':outcome,'provider':'openrouter','model':data.get('model',self.settings.model),'probability':probability,'usage':data.get('usage'), 'request_id':data.get('id'),'thresholds':self.thresholds,'prompt_version':self.prompt_version}

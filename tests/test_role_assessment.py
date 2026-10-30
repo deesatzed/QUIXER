@@ -86,3 +86,30 @@ def test_source_changed_while_role_model_runs_does_not_create_annotation(tmp_pat
     assert result['outcome'] == 'unknown'
     assert db.execute('SELECT count(*) FROM role_annotations').fetchone()[0] == 0
     assert db.execute('SELECT outcome FROM decision_receipts').fetchone()[0] == 'unknown'
+
+def test_agent_record_can_receive_role_score_without_becoming_verified(tmp_path):
+    from quix_knowledge.records import add_record
+    db=open_catalog(':memory:')
+    add_record(db,'finding','finding','Retry risk exists','reviewer')
+    provider=lambda *args: {'outcome':'unclear','provider':'fixture','probability':0.7}
+    assess_role(db,'finding','implementer','1','Implement retry behavior',provider)
+    row=next(r for r in search(db,'retry',variant='role',role='implementer',role_version='1') if r['id']=='finding')
+    assert row['role_score'] == 0.7
+    assert row['role_score_scope'] == 'record'
+    assert row['evidence_status'] == 'unsupported'
+
+def test_stale_agent_record_role_assessment_makes_no_model_call(tmp_path):
+    from quix_knowledge.records import add_record
+    import pytest
+    db=open_catalog(':memory:')
+    path=tmp_path/'doc.md'
+    path.write_text('# Retry\nRetry allowed.')
+    ingest(db,path)
+    section=db.execute('SELECT id FROM sections').fetchone()[0]
+    add_record(db,'finding','finding','Retry allowed','reviewer',evidence=[section])
+    path.write_text('# Retry\nRetry prohibited.')
+    ingest(db,path)
+    calls=[]
+    with pytest.raises(ValueError):
+        assess_role(db,'finding','reviewer','1','Find defects',lambda *args:calls.append(args))
+    assert calls == []
