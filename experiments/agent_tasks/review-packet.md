@@ -4,6 +4,14 @@ Generate `outcome-review.json` and its separate `outcome-key.json` using `prepar
 
 For each output, inspect the task, response and supplied source candidates. Fill the `review` object using `review-schema.json`. Assess correctness, support for cited claims, missing material evidence, and whether the requested task was completed. Use `unknown` when evidence is insufficient and add a brief explanation with relevant source IDs. Record your identity and review date in the packet. The recorded identity is self-reported; this software does not establish independence. Do not interpret an agent's own claims or a model-authored review as independent verification.
 
+For a guided local review, from the repository root run:
+
+```sh
+PYTHONPATH=src python experiments/guided_review.py .local/agent-isolated-16-v2/outcome-review.json .local/agent-isolated-16-v2/review-draft.json --reviewer "Reviewer name"
+```
+
+Use `list`, `search WORD` and `show N` to inspect sources; `review` opens the rubric. Enter supporting source numbers when prompted, or leave them blank. If an answer cites an unknown source ID, describe it in the explanation and judge its support; the supporting-source field accepts only IDs in the packet. `skip` leaves an output unreviewed and `quit` preserves completed reviews. Repeat the same command to resume. The tool does not read the condition key or generate answers, and the original packet remains unchanged. The current packet contains 57 completed outputs; seven missing runs are recorded in the separate key.
+
 The source list includes explicitly synthetic records. A source-linked agent finding is still a claim, not proof that its text is correct; check the cited source. Exact section IDs can identify a document, but truncated context may omit the evidence the agent needed. Compare conditions only after the review is complete and the key is released, including missing runs and small-sample limitations.
 
 After review, run `PYTHONPATH=src python experiments/agent_tasks/compile_review.py PACKET.json KEY.json OUTPUT.json`. The compiler checks the original blinded tasks, source candidates and output text against the local key, validates each review and source ID, and retains failed or absent runs. It does not authenticate the reviewer or prove independence, the truth of a review, the correctness of the key, or the scientific adequacy of the task set.
