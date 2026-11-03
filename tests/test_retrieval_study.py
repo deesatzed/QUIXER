@@ -61,3 +61,45 @@ def test_study_rejects_changed_blind_task_even_if_stored_digest_is_unchanged(tmp
     packet=json.loads(path.read_text()); packet['tasks'][0]['query']='different task'; path.write_text(json.dumps(packet))
     with pytest.raises(ValueError,match='packet'):
         run_prepared_study(root,manifest,study,tmp_path/'run',switch_runner=lambda _: {},count_tokens=len,tokenizer_name='fixture',packet_tokens=10000)
+
+
+def test_role_scoring_precedes_blind_packet_and_covers_all_eligible_units(tmp_path):
+    import sqlite3
+    from quix_knowledge.retrieval_study import prepare_study
+    root=Path(__file__).resolve().parents[1]
+    calls=[]
+    def provider(state,question):
+        calls.append((state['role'],question))
+        return {'outcome':'unclear','provider':'fixture','model':'fixture','probability':0.7,'usage':{'cost':0.01}}
+    output=tmp_path/'scored'
+    summary=prepare_study(root,root/'experiments/retrieval/manifest.json',output,role_provider=provider,role_call_limit=56)
+    packet=json.loads((output/'blind-review-packet.json').read_text())
+    db=sqlite3.connect(output/'catalog.db')
+    try:
+        assert db.execute('select count(*) from role_annotations').fetchone()[0]==56
+        assert summary['role_scoring']['calls']==56
+        assert summary['role_scoring']['reported_cost']==pytest.approx(.56)
+        assert len(calls)==56 and {x[0] for x in calls}=={'implementer','reviewer'}
+        assert all(x[1]=='role usefulness' for x in calls)
+        assert packet['corpus_revision']==summary['corpus_revision']
+        assert all(t['labels'] is None for t in packet['tasks'])
+    finally: db.close()
+
+
+def test_role_scoring_refuses_insufficient_cap_before_any_model_calls(tmp_path):
+    from quix_knowledge.retrieval_study import prepare_study
+    root=Path(__file__).resolve().parents[1]
+    calls=[]
+    with pytest.raises(ValueError,match='call limit'):
+        prepare_study(root,root/'experiments/retrieval/manifest.json',tmp_path/'out',role_provider=lambda *x:calls.append(x),role_call_limit=1)
+    assert not calls
+
+
+def test_role_scoring_provider_failure_stays_unknown_and_has_unknown_cost(tmp_path):
+    from quix_knowledge.retrieval_study import prepare_study
+    root=Path(__file__).resolve().parents[1]
+    def fail(*_): raise TimeoutError()
+    summary=prepare_study(root,root/'experiments/retrieval/manifest.json',tmp_path/'unknown',role_provider=fail,role_call_limit=56)
+    assert summary['role_scoring']['unknown']==56
+    assert summary['role_scoring']['annotations']==0
+    assert summary['role_scoring']['reported_cost'] is None

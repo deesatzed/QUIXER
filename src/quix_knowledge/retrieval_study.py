@@ -5,6 +5,7 @@ from pathlib import Path
 import sqlite3
 
 from .hitm import _check_sources
+from .decisions import assess_role
 from .indexing import index_source
 from .ingest import ingest
 from .labeling import compile_review, prepare_review
@@ -13,7 +14,7 @@ from .store import corpus_fingerprint, open_catalog
 from .switch_comparison import run_switch_comparison
 
 
-def prepare_study(root, manifest_path, output):
+def prepare_study(root, manifest_path, output, *, role_provider=None, role_call_limit=None):
     root=Path(root).resolve()
     manifest_path=Path(manifest_path)
     raw=manifest_path.read_bytes()
@@ -24,6 +25,8 @@ def prepare_study(root, manifest_path, output):
     tasks=manifest.get('tasks')
     groups=manifest.get('groups',{})
     roles=manifest.get('roles',{})
+    if role_provider is not None and (not callable(role_provider) or type(role_call_limit) is not int or not 0 < role_call_limit <= 200):
+        raise ValueError('role scoring requires a bounded call limit')
     if not isinstance(sources,list) or not sources or not isinstance(tasks,list) or not tasks:
         raise ValueError('study sources and tasks are required')
     if len({item.get('id') for item in tasks}) != len(tasks):
@@ -78,12 +81,36 @@ def prepare_study(root, manifest_path, output):
         if not ingest(db,lifecycle):
             raise ValueError('current lifecycle fixture could not be indexed')
         _check_sources(db)
+        role_scoring=None
+        if role_provider is not None:
+            section_ids=[row[0] for row in db.execute("SELECT s.id FROM sections s JOIN sources x ON x.id=s.source_id WHERE x.status='current' ORDER BY s.id")]
+            record_ids=[row[0] for row in db.execute("""SELECT r.id FROM records r WHERE r.status IN ('current','proposed') AND NOT EXISTS
+                (SELECT 1 FROM evidence e JOIN sections s ON s.id=e.section_id JOIN sources x ON x.id=s.source_id WHERE e.record_id=r.id AND x.status != 'current') ORDER BY r.id""")]
+            targets=section_ids+record_ids
+            planned=len(targets)*len(roles)
+            if planned>role_call_limit:
+                raise ValueError('role scoring exceeds call limit')
+            results=[]
+            for role in sorted(roles):
+                definition=roles[role]
+                for target in targets:
+                    _check_sources(db)
+                    results.append(assess_role(db,target,role,definition['version'],definition['purpose'],role_provider))
+                    _check_sources(db)
+            costs=[(item.get('usage') or {}).get('cost') for item in results]
+            role_scoring={'scope':'all_current_sections_and_nonstale_records','roles':sorted(roles),'targets':len(targets),
+                'call_limit':role_call_limit,'calls':len(results),'unknown':sum(item['outcome']=='unknown' for item in results),
+                'annotations':db.execute('SELECT count(*) FROM role_annotations').fetchone()[0],
+                'reported_cost':sum(costs) if costs and all(isinstance(c,(int,float)) and not isinstance(c,bool) and c>=0 for c in costs) else None,
+                'models':sorted({item.get('model') for item in results if isinstance(item.get('model'),str)}),
+                'status':'proposed_uncalibrated'}
         packet=prepare_review(db,tasks,include_proposed=True,candidate_scope='sections_and_records')
         (output/'blind-review-packet.json').write_text(json.dumps(packet,ensure_ascii=False,indent=2),encoding='utf-8')
         summary={'schema':'quix-retrieval-preparation-v1','manifest_sha256':hashlib.sha256(raw).hexdigest(),
             'corpus_revision':packet['corpus_revision'],'task_contract_sha256':packet['task_contract_sha256'],
             'tasks':len(packet['tasks']),'candidates':len(packet['candidates']),'candidate_scope':packet['candidate_scope'],
-            'labels':'unreviewed','synthetic_records':['synthetic-conflicting-finding','synthetic-unsupported-finding','synthetic-stale-finding']}
+            'labels':'unreviewed','synthetic_records':['synthetic-conflicting-finding','synthetic-unsupported-finding','synthetic-stale-finding'],
+            'role_scoring':role_scoring}
         (output/'preparation.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding='utf-8')
         return summary
     finally:
@@ -147,6 +174,7 @@ def run_prepared_study(root, manifest_path, study, output, *, switch_runner, cou
         report['manifest']['study']={'manifest_sha256':preparation['manifest_sha256'],'preparation_corpus_revision':preparation['corpus_revision'],
             'task_contract_sha256':preparation['task_contract_sha256'],'roles':manifest['roles'],'groups':manifest['groups'],
             'role_annotation_count':db.execute('SELECT count(*) FROM role_annotations').fetchone()[0],
+            'role_scoring':preparation.get('role_scoring'),
             'preregistered_packet_tokens':cfg['packet_tokens'],'preregistered_tokenizer':cfg['tokenizer'],
             'budget_deviation':packet_tokens != cfg['packet_tokens'] or tokenizer_name != cfg['tokenizer'],
             'limits':cfg['limits']}
