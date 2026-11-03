@@ -42,6 +42,12 @@ def retrieve_context(db, request):
     _check_sources(db)
     fingerprint = corpus_fingerprint(db)
     rows = search(db,request['task'],variant='role',role=request['role'],role_version=request['role_version'],limit=request['limit'])
+    for row in rows:
+        if row['record_type'] == 'agent_record':
+            row['evidence_sources'] = [dict(item) for item in db.execute('''SELECT s.id AS section_id,x.path,x.revision,x.status AS source_status,
+                s.start_line,s.end_line,p.page_start,p.page_end FROM evidence e JOIN sections s ON s.id=e.section_id
+                JOIN sources x ON x.id=s.source_id LEFT JOIN section_pages p ON p.section_id=s.id
+                WHERE e.record_id=? ORDER BY s.id''',(row['id'],))]
     _check_sources(db)
     if corpus_fingerprint(db) != fingerprint:
         raise ValueError('catalog changed during retrieval')

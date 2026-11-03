@@ -31,6 +31,25 @@ def test_adapter_refuses_source_changed_after_ingestion(tmp_path):
         retrieve_context(db, {'version': 1, 'task': 'retry', 'role': 'reviewer', 'role_version': '1', 'limit': 3, 'budget_characters': 3000})
 
 
+def test_agent_record_carries_its_evidence_source_revision_and_anchor(tmp_path):
+    from quix_knowledge.hitm import retrieve_context
+    from quix_knowledge.records import add_record
+    db = open_catalog(':memory:')
+    path = tmp_path / 'manual.md'
+    path.write_text('# Retry\nRetry after a timeout.')
+    ingest(db, path)
+    section = db.execute('SELECT id FROM sections').fetchone()[0]
+    add_record(db, 'finding-1', 'finding', 'zorbnitz conclusion', 'agent', evidence=[section])
+    result = retrieve_context(db, {'version': 1, 'task': 'zorbnitz', 'role': 'reviewer', 'role_version': '1', 'limit': 3, 'budget_characters': 5000})
+    item = result['packet']['results'][0]
+    assert item['record_type'] == 'agent_record'
+    assert item['evidence_status'] == 'current'
+    assert item['evidence_sources'][0]['section_id'] == section
+    assert item['evidence_sources'][0]['path'] == str(path)
+    assert item['evidence_sources'][0]['revision']
+    assert item['evidence_sources'][0]['start_line'] == 1
+
+
 def test_adapter_rechecks_after_search(tmp_path, monkeypatch):
     import quix_knowledge.hitm as contract
     db = open_catalog(':memory:')
