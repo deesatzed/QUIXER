@@ -10,6 +10,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--db', required=True)
     sub = parser.add_subparsers(dest='command', required=True)
+    sub.add_parser('hitm-context',help='read one bounded context request from standard input')
     ingest_parser = sub.add_parser('ingest')
     ingest_parser.add_argument('path')
     sub.add_parser('refresh',help='reconcile known source files with the catalog')
@@ -142,6 +143,9 @@ def main():
             parser.error('hybrid ranking requires --jevedge-root and --embedding-model-path')
         if args.ranking != 'hybrid' and (args.jevedge_root or args.embedding_model_path):
             parser.error('embedding paths require hybrid ranking')
+    if args.command == 'hitm-context':
+        from .hitm import cli_context
+        return cli_context(args.db)
     db = open_catalog(args.db)
     try:
         def configured_provider():
