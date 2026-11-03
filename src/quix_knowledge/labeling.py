@@ -13,7 +13,7 @@ def _task_hash(tasks):
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
-def _candidates(db, include_proposed):
+def _candidates(db, include_proposed, candidate_scope='variant_specific'):
     validate_retrievable_ids(db)
     rows = db.execute("""SELECT s.id,'section' AS record_type,s.title,s.body,s.source_id,s.start_line,s.end_line,
         p.page_start,p.page_end,src.path,src.revision,src.status AS source_status
@@ -21,7 +21,7 @@ def _candidates(db, include_proposed):
         WHERE src.status='current' ORDER BY s.id""").fetchall()
     candidates = [dict(row) for row in rows]
     statuses = ('accepted','proposed') if include_proposed else ('accepted',)
-    rows = db.execute("""SELECT g.id,'generated_index' AS record_type,g.title,g.body,g.section_id AS source_section_id,
+    rows = [] if candidate_scope == 'sections_and_records' else db.execute("""SELECT g.id,'generated_index' AS record_type,g.title,g.body,g.section_id AS source_section_id,
         g.start_offset,g.end_offset,g.status AS index_status,s.source_id,p.page_start,p.page_end,src.path,src.revision,src.status AS source_status
         FROM generated_index g JOIN sections s ON s.id=g.section_id JOIN sources src ON src.id=s.source_id
         LEFT JOIN section_pages p ON p.section_id=s.id WHERE src.status='current' AND g.status IN (%s) ORDER BY g.id""" % ','.join('?'*len(statuses)),statuses).fetchall()
@@ -37,9 +37,11 @@ def _candidates(db, include_proposed):
     return sorted(candidates,key=lambda item:item['id'])
 
 
-def prepare_review(db, tasks, *, include_proposed=False):
+def prepare_review(db, tasks, *, include_proposed=False, candidate_scope='variant_specific'):
     if not isinstance(tasks,list) or not tasks:
         raise ValueError('a nonempty task list is required')
+    if candidate_scope not in ('variant_specific','sections_and_records'):
+        raise ValueError('invalid candidate scope')
     prepared = []
     for task in tasks:
         if not isinstance(task,dict) or any(not isinstance(task.get(k),str) or not task[k].strip() for k in ('id','query','role','role_version')):
@@ -50,7 +52,7 @@ def prepare_review(db, tasks, *, include_proposed=False):
         prepared.append({'id':task['id'],'query':task['query'],'role':task['role'],'role_version':task['role_version'],'split':split,'labels':None,'reviewed':False,'missing_reason':None})
     if len({task['id'] for task in prepared}) != len(prepared):
         raise ValueError('task IDs must be unique')
-    return {'schema':'quix-blind-review-v1','corpus_revision':corpus_fingerprint(db),'task_contract_sha256':_task_hash(prepared),'include_proposed':include_proposed,'reviewer':None,'candidates':_candidates(db,include_proposed),'tasks':prepared}
+    return {'schema':'quix-blind-review-v1','corpus_revision':corpus_fingerprint(db),'task_contract_sha256':_task_hash(prepared),'include_proposed':include_proposed,'candidate_scope':candidate_scope,'reviewer':None,'candidates':_candidates(db,include_proposed,candidate_scope),'tasks':prepared}
 
 
 def compile_review(db, packet):
@@ -68,7 +70,10 @@ def compile_review(db, packet):
         raise ValueError('task contract changed')
     if type(packet.get('include_proposed')) is not bool:
         raise ValueError('invalid proposal setting')
-    expected = _candidates(db,packet['include_proposed'])
+    scope = packet.get('candidate_scope','variant_specific')
+    if scope not in ('variant_specific','sections_and_records'):
+        raise ValueError('invalid candidate scope')
+    expected = _candidates(db,packet['include_proposed'],scope)
     if packet.get('candidates') != expected:
         raise ValueError('candidate material changed')
     valid_ids = {item['id'] for item in expected}
@@ -88,4 +93,4 @@ def compile_review(db, packet):
             if not labels and (not isinstance(task.get('missing_reason'),str) or not task['missing_reason'].strip()):
                 raise ValueError('unanswerable task requires a reason')
         compiled.append({key:task[key] for key in _TASK_FIELDS} | {'labels':labels,'missing_reason':task.get('missing_reason')})
-    return {'schema':'quix-reviewed-labels-v1','corpus_revision':packet['corpus_revision'],'include_proposed':packet['include_proposed'],'tasks':compiled,'label_provenance':{'reviewer':reviewer.strip(),'compiled_at':datetime.now(timezone.utc).isoformat(),'identity_independence':'self-reported; not verified'}}
+    return {'schema':'quix-reviewed-labels-v1','corpus_revision':packet['corpus_revision'],'include_proposed':packet['include_proposed'],'candidate_scope':scope,'tasks':compiled,'label_provenance':{'reviewer':reviewer.strip(),'compiled_at':datetime.now(timezone.utc).isoformat(),'identity_independence':'self-reported; not verified'}}

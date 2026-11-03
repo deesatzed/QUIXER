@@ -83,6 +83,7 @@ def main():
     review_prepare_parser = sub.add_parser('prepare-review')
     review_prepare_parser.add_argument('tasks',help='JSON array of tasks')
     review_prepare_parser.add_argument('--include-proposed',action='store_true')
+    review_prepare_parser.add_argument('--matched-candidates',action='store_true')
     review_compile_parser = sub.add_parser('compile-review')
     review_compile_parser.add_argument('packet',help='reviewed JSON packet')
     experiment_parser.add_argument('--reviewed',action='store_true',help='tasks input is a compiled review artifact')
@@ -175,7 +176,7 @@ def main():
         if args.command == 'prepare-review':
             from .labeling import prepare_review
             tasks = json.loads(Path(args.tasks).read_text(encoding='utf-8'))
-            print(json.dumps(prepare_review(db,tasks,include_proposed=args.include_proposed)))
+            print(json.dumps(prepare_review(db,tasks,include_proposed=args.include_proposed,candidate_scope='sections_and_records' if args.matched_candidates else 'variant_specific')))
             return 0
         if args.command == 'compile-review':
             from .labeling import compile_review

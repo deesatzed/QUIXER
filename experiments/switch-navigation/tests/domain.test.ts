@@ -12,6 +12,23 @@ import { replayOf } from '@osolmaz/switch';
 import { navigate, replayNavigation } from '../src/domain.ts';
 import { capInitialCandidates, projectSnapshot } from '../src/project-snapshot.ts';
 
+test('repeated headings remain distinct selectable passages', async () => {
+  const dir=await mkdtemp(join(tmpdir(),'quix-duplicate-'));
+  try {
+    const path=join(dir,'guide.txt'); const text='same heading'; await writeFile(path,text);
+    const candidate={title:'Introduction',body:text,record_type:'section',source_status:'current',path,revision:createHash('sha256').update(text).digest('hex'),start_line:1,end_line:1,topics:[],tier:'initial'};
+    const snapshot={version:1,task:'intro',role:'reviewer',role_version:'1',catalog_fingerprint:'fixture',max_steps:3,max_characters:5000,candidates:[{...candidate,id:'one'},{...candidate,id:'two'}]};
+    const decider=fakeDecider((request,call)=>{
+      const q=request.decisionQuestions['pick']; assert.equal(q?.type,'choice');
+      const options=Object.entries(q.criteria).filter(([,text])=>text.startsWith('Inspect passage'));
+      if (call===1) assert.equal(new Set(options.map(([,text])=>text)).size,2);
+      const label=call===1 ? options[0]?.[0] : Object.entries(q.criteria).find(([,text])=>text.startsWith('Stop'))?.[0];
+      assert.ok(label); return answered({pick:{type:'choice',choice:label,probabilities:{[label]:1},confidence:1}});
+    });
+    assert.equal((await navigate(snapshot,decider)).status,'complete');
+  } finally { await rm(dir,{recursive:true,force:true}); }
+});
+
 test('inspects a source-bound section, stops, and replays without a model', async () => {
   const dir = await mkdtemp(join(tmpdir(),'quix-switch-'));
   try {

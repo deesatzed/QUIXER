@@ -129,4 +129,9 @@ def run_reviewed_experiment(db, reviewed, **kwargs):
         raise ValueError('review provenance and proposal scope come from the reviewed artifact')
     if type(reviewed.get('include_proposed')) is not bool or not isinstance(reviewed.get('label_provenance'),dict):
         raise ValueError('invalid reviewed-label provenance or proposal scope')
+    scope = reviewed.get('candidate_scope','variant_specific')
+    if scope not in ('variant_specific','sections_and_records'):
+        raise ValueError('invalid reviewed-label candidate scope')
+    if scope == 'sections_and_records' and kwargs.get('matched_candidates') is not True:
+        raise ValueError('reviewed labels require matched candidates')
     return run_experiment(db,reviewed['tasks'],label_provenance=reviewed['label_provenance'],include_proposed=reviewed['include_proposed'],**kwargs)

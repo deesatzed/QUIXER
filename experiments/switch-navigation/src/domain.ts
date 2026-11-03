@@ -60,7 +60,7 @@ export function createNavigation(input: unknown): StateMachine<NavigationState> 
       }
       for (const c of candidates) {
         const roleNote=c.role_annotation ? ` [uncalibrated role estimate ${c.role_annotation.score}; ${c.role_annotation.status}]` : '';
-        if (!state.evidence.some(e => e.id === c.id)) options.push({type:'inspect_span',key:`span:${c.id}`,target:c.id,text:`Inspect passage: ${c.title}${roleNote}`});
+        if (!state.evidence.some(e => e.id === c.id)) options.push({type:'inspect_span',key:`span:${c.id}`,target:c.id,text:`Inspect passage: ${c.title}${roleNote} [source ${c.id}]`});
       }
       if (!state.broadened && snapshot.candidates.some(c => c.tier === 'broadened')) options.push({type:'broaden',key:'broaden',target:'',text:'Broaden the candidate set'});
       options.push({type:'stop',key:'stop',target:'',text:'Stop gathering',priority:-1});

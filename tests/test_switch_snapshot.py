@@ -51,3 +51,17 @@ def test_snapshot_includes_role_score_only_at_requested_proposal_scope(tmp_path)
     assert hidden['candidates'][0]['role_annotation'] is None
     assert included['candidates'][0]['role_annotation']['score'] == 0.8
     assert included['candidates'][0]['role_annotation']['status'] == 'proposed'
+
+
+def test_matched_snapshot_uses_same_sections_and_records_as_experiment(tmp_path):
+    from quix_knowledge.indexing import index_source
+    from quix_knowledge.switch_snapshot import build_snapshot
+    db = open_catalog(':memory:')
+    path = tmp_path/'manual.txt'
+    path.write_text('Retry after timeout.\n\nRecord the failure.')
+    index_source(db,path)
+    section = db.execute('SELECT id FROM sections').fetchone()[0]
+    add_record(db,'f1','finding','retry finding','agent',evidence=[section])
+    snapshot = build_snapshot(db,task='retry',role='reviewer',role_version='1',max_steps=5,max_characters=5000,include_proposed=True,matched_candidates=True)
+    assert {c['id'] for c in snapshot['candidates']} == {section,'f1'}
+    assert snapshot['candidate_scope'] == 'sections_and_records'
