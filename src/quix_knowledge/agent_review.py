@@ -50,7 +50,9 @@ def prepare_agent_review(report, tasks, *, seed):
         if identity in seen: raise ValueError('duplicate run')
         seen.add(identity)
         if run.get('status')=='completed' and isinstance(run.get('output'),str): completed.append(run)
-        else: missing.append({'task_id':run['task_id'],'condition':run['condition'],'status':run.get('status','unknown')})
+        else:
+            status='invalid_output' if run.get('status')=='completed' else run.get('status','unknown')
+            missing.append({'task_id':run['task_id'],'condition':run['condition'],'status':status})
     for task_id in by_id:
         for condition in ('none','baseline','role','switch'):
             if (task_id,condition) not in seen:

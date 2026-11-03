@@ -15,3 +15,15 @@ Use `list`, `search WORD` and `show N` to inspect sources; `review` opens the ru
 The source list includes explicitly synthetic records. A source-linked agent finding is still a claim, not proof that its text is correct; check the cited source. Exact section IDs can identify a document, but truncated context may omit the evidence the agent needed. Compare conditions only after the review is complete and the key is released, including missing runs and small-sample limitations.
 
 After review, run `PYTHONPATH=src python experiments/agent_tasks/compile_review.py PACKET.json KEY.json OUTPUT.json`. The compiler checks the original blinded tasks, source candidates and output text against the local key, validates each review and source ID, and retains failed or absent runs. It does not authenticate the reviewer or prove independence, the truth of a review, the correctness of the key, or the scientific adequacy of the task set.
+
+To produce a per-task paired report after the reviewer has finished the isolated 16-task packet, run:
+
+```sh
+PYTHONPATH=src python experiments/agent_tasks/analyze_review.py \
+  .local/agent-isolated-16-v2/review-draft.json \
+  .local/agent-isolated-16-v2/outcome-key.json \
+  .local/agent-isolated-16-v2 .local/retrieval-study-isolated-v1 \
+  .local/agent-isolated-16-v2/paired-analysis.json
+```
+
+This verifies the task manifest, review contract, catalog and copied source revisions, retrieval evidence, and recorded input packets before unblinding. The output retains each condition's review, failure, latency and reported cost; unknown costs remain unknown. It separates planner, switch and role-indexing accounting, and does not declare a winner or calculate a confidence interval. The report contains local source paths and reviewer explanations, so it stays local unless deliberately sanitized. Verification is point-in-time; it does not independently re-extract PDF text, authenticate the reviewer, or verify agent-authored claims. If a source or recorded packet has changed, analysis stops rather than silently rebinding the review.

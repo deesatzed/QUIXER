@@ -8,7 +8,7 @@ import shutil
 import sqlite3
 
 import tiktoken
-from quix_knowledge.agent_context import make_agent_packet
+from quix_knowledge.agent_context import build_agent_packets
 from quix_knowledge.agent_process import PlannerProcess
 from quix_knowledge.agent_study import run_agent_study, validate_agent_manifest, validate_retrieval_replay, validate_replay_evidence
 from quix_knowledge.hitm import _check_sources
@@ -68,16 +68,7 @@ try:
         raise RuntimeError('prepared catalog changed')
     (output/'retrieval-report.json').write_text(json.dumps(comparison,ensure_ascii=False,indent=2))
     fingerprint=comparison['manifest']['corpus_revision']
-    packets={}
-    for task in manifest['tasks']:
-        for condition in ('baseline','role','switch'):
-            q=comparison['variants'][condition]['queries'][task['id']]
-            rows=[dict(item) for item in q['results']]
-            if rows and q.get('fallback_reason'): rows[0]['fallback_reason']=q['fallback_reason']
-            for row in rows:
-                if row['record_type']=='agent_record':
-                    row['evidence_sources']=[dict(item) for item in db.execute('''SELECT s.id AS section_id,x.path,x.revision,x.status AS source_status,s.start_line,s.end_line,p.page_start,p.page_end FROM evidence e JOIN sections s ON s.id=e.section_id JOIN sources x ON x.id=s.source_id LEFT JOIN section_pages p ON p.section_id=s.id WHERE e.record_id=? ORDER BY s.id''',(row['id'],))]
-            packets[(task['id'],condition)]=make_agent_packet(task,rows,fingerprint=fingerprint,body_characters=args.body_characters,result_limit=args.result_limit)
+    packets=build_agent_packets(db,comparison,manifest['tasks'],body_characters=args.body_characters,result_limit=args.result_limit)
     (output/'packets.json').write_text(json.dumps([{'task_id':key[0],'condition':key[1],'packet':value} for key,value in packets.items()],ensure_ascii=False,indent=2))
     settings=load_settings(args.env_file,args.decision_slot)
     agent=PlannerProcess([str(Path(args.planner).resolve())],api_key=settings.api_key,model=args.model,timeout=60)

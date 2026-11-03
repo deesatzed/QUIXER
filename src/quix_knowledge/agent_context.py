@@ -20,3 +20,20 @@ def make_agent_packet(task, rows, *, fingerprint, body_characters=300, result_li
     if len(serialize_packet(packet))>10000:
         raise ValueError('packet exceeded budget after omitted results')
     return packet
+
+
+def build_agent_packets(db, comparison, tasks, *, body_characters=300, result_limit=1):
+    """Construct condition packets from a source-validated comparison report."""
+    fingerprint=comparison['manifest']['corpus_revision']
+    packets={}
+    for task in tasks:
+        for condition in ('baseline','role','switch'):
+            query=comparison['variants'][condition]['queries'][task['id']]
+            rows=[dict(item) for item in query['results']]
+            if rows and query.get('fallback_reason'):
+                rows[0]['fallback_reason']=query['fallback_reason']
+            for row in rows:
+                if row['record_type']=='agent_record':
+                    row['evidence_sources']=[dict(item) for item in db.execute('''SELECT s.id AS section_id,x.path,x.revision,x.status AS source_status,s.start_line,s.end_line,p.page_start,p.page_end FROM evidence e JOIN sections s ON s.id=e.section_id JOIN sources x ON x.id=s.source_id LEFT JOIN section_pages p ON p.section_id=s.id WHERE e.record_id=? ORDER BY s.id''',(row['id'],))]
+            packets[(task['id'],condition)]=make_agent_packet(task,rows,fingerprint=fingerprint,body_characters=body_characters,result_limit=result_limit)
+    return packets
