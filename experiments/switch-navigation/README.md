@@ -23,3 +23,12 @@ The model view is bounded in serialized JavaScript characters, with explicit tru
 The OpenRouter decider uses the [OpenRouter Decisions endpoint](https://openrouter.ai/openai/gpt-6-luna-decisions/providers) with typed choices. It validates answers and, in the live smoke, sends each choice set in two orders; disagreement, invalid output, timeout or unavailable service produces insufficient evidence. Reversing options detects one kind of instability only; agreement is not calibration or accuracy. The emitted switch trace records states, questions and answers, while `model_requests` records the model views and questions. `replayNavigation` repeats a trace without model calls and rechecks sources; replay traces are not authenticated and do not prove relevance or truth.
 
 The first live project-document smokes produced no usable evidence: Joey, Liquid d1.1 and Perplexity Decider disagreed across option orders on the original prompt. With a reduced initial set, Joey took one stable broaden step before disagreeing on the next; Perplexity disagreed immediately and Liquid stopped without inspecting evidence. These are a few observed integration calls, not a provider comparison or proof of improvement. Full results and costs are recorded in `PROGRESS.md` and local raw reports.
+
+A later five-task exploratory run produced one complete Joey navigation trace with one source-bound passage. Its exact saved trace was replayed without model calls and with the same final state. From the repository root, while the original local catalog, report and cited source revisions remain available, reproduce that replay with:
+
+```sh
+PYTHONPATH=src python experiments/switch-navigation/replay_saved.py \
+  .local/agent-live-v1/catalog-copy.db .local/agent-live-v1/retrieval-report.json agent-timeout
+```
+
+The command opens the catalog read-only, reconstructs the snapshot from the report's task and limits, rechecks the catalog fingerprint and source revisions, and feeds the recorded trace to the local switch replay. It reports the outcome and a trace digest without printing source bodies. It does not use `.env` or call a model. A valid replay can still have `insufficient_evidence`; an unchanged trace does not establish that its selected passage is relevant or that the trace is authentic. A changed or missing source, catalog or incompatible trace makes replay fail. Since IDs and fingerprints include local paths, a fresh checkout or moved corpus does not automatically reproduce the original case.
