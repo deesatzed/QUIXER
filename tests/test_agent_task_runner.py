@@ -83,3 +83,72 @@ def test_agent_packet_preserves_revision_and_marks_body_truncation():
     assert packet['results'][0]['revision']=='rev'
     assert packet['tokenizer']=='json-characters'
     assert row['body']=='a'*500
+
+
+def test_agent_packet_can_include_multiple_sources_and_counts_omissions():
+    from quix_knowledge.agent_context import make_agent_packet
+    task={'query':'what','role':'reviewer','role_version':'1'}
+    rows=[{'id':str(i),'record_type':'section','title':'source','body':'abc','path':'/source','revision':'rev','source_status':'current','start_line':1,'end_line':1} for i in range(4)]
+    packet=make_agent_packet(task,rows,fingerprint='fp',body_characters=10,result_limit=3)
+    assert [x['id'] for x in packet['results']]==['0','1','2']
+    assert packet['omitted_count']==1
+
+
+def test_agent_manifest_rejects_labels_and_wrong_condition_set_before_calls():
+    from quix_knowledge.agent_study import validate_agent_manifest
+    manifest={'schema':'quix-agent-study-manifest-v1','seed':1,'max_input_characters':12000,
+              'conditions':['none','baseline','role','switch'],
+              'tasks':[{'id':'t','query':'task','role':'reviewer','role_version':'1'}]}
+    validate_agent_manifest(manifest)
+    bad=json.loads(json.dumps(manifest)); bad['tasks'][0]['labels']=['answer']
+    with pytest.raises(ValueError,match='label'): validate_agent_manifest(bad)
+    bad=json.loads(json.dumps(manifest)); bad['conditions'].pop()
+    with pytest.raises(ValueError,match='conditions'): validate_agent_manifest(bad)
+
+
+def test_agent_study_emits_schedule_before_runs_and_each_result_as_it_finishes():
+    from quix_knowledge.agent_study import run_agent_study
+    task={'id':'t','query':'task','role':'reviewer','role_version':'1'}
+    events=[]
+    def agent(_):
+        assert events and events[0][0]=='schedule'
+        return {'output':'fixture'}
+    result=run_agent_study([task],context_provider=lambda *_:{},agent=agent,seed=1,
+        on_schedule=lambda schedule:events.append(('schedule',schedule)),
+        on_result=lambda row:events.append(('result',row)))
+    assert events[0][1]==result['schedule']
+    assert [event[1] for event in events[1:]]==result['runs']
+    assert len(events)==5
+
+
+def test_retrieval_replay_requires_same_tasks_scope_and_corpus():
+    from quix_knowledge.agent_study import validate_retrieval_replay
+    task={'id':'t','query':'task','role':'reviewer','role_version':'1'}
+    r={'manifest':{'corpus_revision':'fp','tasks':[task],'packet_tokens':2000,'tokenizer':'cl100k_base','limit':3,'ranking':'bm25','candidate_scope':'sections_and_records','include_proposed':True},
+       'variants':{name:{'queries':{'t':{'results':[]}}} for name in ('baseline','role','switch')}}
+    validate_retrieval_replay(r,[task],'fp')
+    changed=json.loads(json.dumps(r)); changed['manifest']['tasks'][0]['query']='other'
+    with pytest.raises(ValueError,match='tasks'): validate_retrieval_replay(changed,[task],'fp')
+    with pytest.raises(ValueError,match='corpus'): validate_retrieval_replay(r,[task],'other')
+    changed=json.loads(json.dumps(r)); del changed['variants']['role']['queries']['t']
+    with pytest.raises(ValueError,match='queries'): validate_retrieval_replay(changed,[task],'fp')
+
+
+def test_planner_process_rejects_changed_executable_before_use(tmp_path):
+    from quix_knowledge.agent_process import PlannerProcess
+    executable=tmp_path/'planner'
+    executable.write_text('#!/bin/sh\necho original\n'); executable.chmod(0o700)
+    planner=PlannerProcess([str(executable)],api_key='key',model='test',timeout=5)
+    executable.write_text('#!/bin/sh\necho changed\n')
+    result=planner({'query':'task','role':'reviewer','role_version':'1','context':None})
+    assert result['status']=='executable_changed'
+
+
+def test_planner_process_preserves_unsupported_or_stale_evidence_status(tmp_path):
+    import sys
+    from quix_knowledge.agent_process import PlannerProcess
+    script=tmp_path/'agent.py'
+    script.write_text('import json\nprint(json.dumps({"status":"unsupported_or_stale_evidence"}))\n')
+    agent=PlannerProcess([sys.executable,str(script)],api_key='key',model='test',timeout=5)
+    result=agent({'query':'task','role':'reviewer','role_version':'1','context':None})
+    assert result['status']=='unsupported_or_stale_evidence'

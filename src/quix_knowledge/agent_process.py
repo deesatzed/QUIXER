@@ -1,10 +1,13 @@
 """Run the isolated HITMCockpit planner executable as a bounded child process."""
 import json
+import hashlib
 import os
+from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 
-_STATUSES={'invalid_request','configuration_missing','agent_failure','intent_too_large','task_mismatch','source_changed','context_invalid'}
+_STATUSES={'invalid_request','configuration_missing','agent_failure','intent_too_large','task_mismatch','source_changed','context_invalid','unsupported_or_stale_evidence'}
 
 
 class PlannerProcess:
@@ -12,6 +15,14 @@ class PlannerProcess:
         if not isinstance(command,list) or not command or not all(isinstance(x,str) and x for x in command) or not api_key or not model or not 0 < timeout <= 120:
             raise ValueError('invalid process configuration')
         self.command=list(command)
+        resolved=shutil.which(self.command[0])
+        if resolved is None:
+            raise ValueError('planner executable unavailable')
+        self.command[0]=str(Path(resolved).resolve())
+        try:
+            self.executable_sha256=hashlib.sha256(Path(self.command[0]).read_bytes()).hexdigest()
+        except OSError as exc:
+            raise ValueError('planner executable unavailable') from exc
         self._key=api_key
         self.model=model
         self.timeout=timeout
@@ -23,8 +34,12 @@ class PlannerProcess:
             return {'status':'input_budget_exceeded'}
         environment={'PATH':os.environ.get('PATH','/usr/bin:/bin'),'OPENROUTER_API_KEY':self._key,'QUIX_STUDY_AGENT_MODEL':self.model}
         try:
+            if hashlib.sha256(Path(self.command[0]).read_bytes()).hexdigest()!=self.executable_sha256:
+                return {'status':'executable_changed'}
             with tempfile.TemporaryFile() as output:
                 process=subprocess.run(self.command,input=raw,stdout=output,stderr=subprocess.DEVNULL,env=environment,timeout=self.timeout,check=False)
+                if hashlib.sha256(Path(self.command[0]).read_bytes()).hexdigest()!=self.executable_sha256:
+                    return {'status':'executable_changed'}
                 if process.returncode != 0 or output.tell()>500_000:
                     return {'status':'process_failure'}
                 output.seek(0); result=json.load(output)

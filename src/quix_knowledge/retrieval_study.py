@@ -14,7 +14,33 @@ from .store import corpus_fingerprint, open_catalog
 from .switch_comparison import run_switch_comparison
 
 
-def prepare_study(root, manifest_path, output, *, role_provider=None, role_call_limit=None):
+def verify_source_snapshot(study, preparation, manifest):
+    """Verify every copied input, including templates not indexed as live sources."""
+    if preparation.get('source_mode') != 'isolated_copy':
+        return
+    root=Path(study).resolve()
+    expected=[]
+    for source in manifest.get('sources',[]):
+        name=source['path']
+        if Path(name).is_absolute() or '..' in Path(name).parts:
+            raise ValueError('invalid snapshot path')
+        expected.append({'source':name,'snapshot':str(Path('source-snapshot')/name),
+            'sha256':source['sha256'],'kind':source['kind']})
+    if preparation.get('source_snapshot') != expected:
+        raise ValueError('source snapshot manifest differs')
+    for item in expected:
+        path=(root/item['snapshot']).resolve()
+        if not path.is_relative_to(root/'source-snapshot'):
+            raise ValueError('snapshot path escapes study')
+        try:
+            text=path.read_text(encoding='utf-8')
+        except (OSError,UnicodeError) as exc:
+            raise ValueError('source snapshot unavailable') from exc
+        if hashlib.sha256(text.encode('utf-8')).hexdigest()!=item['sha256']:
+            raise ValueError('source snapshot changed')
+
+
+def prepare_study(root, manifest_path, output, *, role_provider=None, role_call_limit=None, isolated_sources=False):
     root=Path(root).resolve()
     manifest_path=Path(manifest_path)
     raw=manifest_path.read_bytes()
@@ -25,6 +51,8 @@ def prepare_study(root, manifest_path, output, *, role_provider=None, role_call_
     tasks=manifest.get('tasks')
     groups=manifest.get('groups',{})
     roles=manifest.get('roles',{})
+    if type(isolated_sources) is not bool:
+        raise ValueError('isolated_sources must be boolean')
     if role_provider is not None and (not callable(role_provider) or type(role_call_limit) is not int or not 0 < role_call_limit <= 200):
         raise ValueError('role scoring requires a bounded call limit')
     if not isinstance(sources,list) or not sources or not isinstance(tasks,list) or not tasks:
@@ -39,6 +67,8 @@ def prepare_study(root, manifest_path, output, *, role_provider=None, role_call_
     for source in sources:
         if not isinstance(source,dict) or source.get('kind') not in ('project','synthetic','synthetic_lifecycle_template') or not isinstance(source.get('path'),str) or source['path'] in files:
             raise ValueError('invalid source declaration')
+        if isolated_sources and (Path(source['path']).is_absolute() or '..' in Path(source['path']).parts):
+            raise ValueError('isolated source path must be relative')
         path=(root/source['path']).resolve()
         if not path.is_relative_to(root):
             raise ValueError('source path escapes project root')
@@ -51,6 +81,17 @@ def prepare_study(root, manifest_path, output, *, role_provider=None, role_call_
         files[source['path']]=(path,body,source['kind'])
     output=Path(output)
     output.mkdir(parents=True,exist_ok=False)
+    output=output.resolve()
+    source_snapshot=[]
+    if isolated_sources:
+        for name,(_,body,kind) in list(files.items()):
+            snapshot=output/'source-snapshot'/name
+            snapshot.parent.mkdir(parents=True,exist_ok=True)
+            with snapshot.open('x',encoding='utf-8',newline='\n') as stream:
+                stream.write(body)
+            files[name]=(snapshot,body,kind)
+            source_snapshot.append({'source':name,'snapshot':str(snapshot.relative_to(output)),
+                'sha256':hashlib.sha256(body.encode('utf-8')).hexdigest(),'kind':kind})
     db=open_catalog(output/'catalog.db')
     try:
         source_ids={}
@@ -97,6 +138,8 @@ def prepare_study(root, manifest_path, output, *, role_provider=None, role_call_
                     _check_sources(db)
                     results.append(assess_role(db,target,role,definition['version'],definition['purpose'],role_provider))
                     _check_sources(db)
+                    if isolated_sources:
+                        verify_source_snapshot(output,{'source_mode':'isolated_copy','source_snapshot':source_snapshot},manifest)
             costs=[(item.get('usage') or {}).get('cost') for item in results]
             role_scoring={'scope':'all_current_sections_and_nonstale_records','roles':sorted(roles),'targets':len(targets),
                 'call_limit':role_call_limit,'calls':len(results),'unknown':sum(item['outcome']=='unknown' for item in results),
@@ -104,13 +147,16 @@ def prepare_study(root, manifest_path, output, *, role_provider=None, role_call_
                 'reported_cost':sum(costs) if costs and all(isinstance(c,(int,float)) and not isinstance(c,bool) and c>=0 for c in costs) else None,
                 'models':sorted({item.get('model') for item in results if isinstance(item.get('model'),str)}),
                 'status':'proposed_uncalibrated'}
+        if isolated_sources:
+            verify_source_snapshot(output,{'source_mode':'isolated_copy','source_snapshot':source_snapshot},manifest)
         packet=prepare_review(db,tasks,include_proposed=True,candidate_scope='sections_and_records')
         (output/'blind-review-packet.json').write_text(json.dumps(packet,ensure_ascii=False,indent=2),encoding='utf-8')
         summary={'schema':'quix-retrieval-preparation-v1','manifest_sha256':hashlib.sha256(raw).hexdigest(),
             'corpus_revision':packet['corpus_revision'],'task_contract_sha256':packet['task_contract_sha256'],
             'tasks':len(packet['tasks']),'candidates':len(packet['candidates']),'candidate_scope':packet['candidate_scope'],
             'labels':'unreviewed','synthetic_records':['synthetic-conflicting-finding','synthetic-unsupported-finding','synthetic-stale-finding'],
-            'role_scoring':role_scoring}
+            'role_scoring':role_scoring,'source_mode':'isolated_copy' if isolated_sources else 'original_paths',
+            'source_snapshot':source_snapshot if isolated_sources else None}
         (output/'preparation.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding='utf-8')
         return summary
     finally:
@@ -127,6 +173,7 @@ def run_prepared_study(root, manifest_path, study, output, *, switch_runner, cou
     packet=json.loads((study/'blind-review-packet.json').read_text(encoding='utf-8'))
     if preparation.get('manifest_sha256') != hashlib.sha256(manifest_bytes).hexdigest():
         raise ValueError('study manifest changed since preparation')
+    verify_source_snapshot(study,preparation,manifest)
     if packet.get('task_contract_sha256') != preparation.get('task_contract_sha256') or packet.get('corpus_revision') != preparation.get('corpus_revision'):
         raise ValueError('study packet differs from preparation')
     original=sqlite3.connect((study/'catalog.db').resolve().as_uri()+'?mode=ro',uri=True)
@@ -175,6 +222,8 @@ def run_prepared_study(root, manifest_path, study, output, *, switch_runner, cou
             'task_contract_sha256':preparation['task_contract_sha256'],'roles':manifest['roles'],'groups':manifest['groups'],
             'role_annotation_count':db.execute('SELECT count(*) FROM role_annotations').fetchone()[0],
             'role_scoring':preparation.get('role_scoring'),
+            'source_mode':preparation.get('source_mode','not_recorded'),
+            'source_snapshot':preparation.get('source_snapshot'),
             'preregistered_packet_tokens':cfg['packet_tokens'],'preregistered_tokenizer':cfg['tokenizer'],
             'budget_deviation':packet_tokens != cfg['packet_tokens'] or tokenizer_name != cfg['tokenizer'],
             'limits':cfg['limits']}

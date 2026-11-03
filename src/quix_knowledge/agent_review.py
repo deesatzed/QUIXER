@@ -22,9 +22,15 @@ def _contract(packet):
     return hashlib.sha256(json.dumps(immutable,sort_keys=True,ensure_ascii=False,separators=(',',':')).encode()).hexdigest()
 
 
+def _key_contract(key):
+    immutable={name:value for name,value in key.items() if name!='key_contract_sha256'}
+    return hashlib.sha256(json.dumps(immutable,sort_keys=True,ensure_ascii=False,separators=(',',':')).encode()).hexdigest()
+
+
 def seal_review_packet(packet,key):
     """Bind immutable task, source and output material to the separate local key."""
     key['packet_contract_sha256']=_contract(packet)
+    key['key_contract_sha256']=_key_contract(key)
 
 
 def prepare_agent_review(report, tasks, *, seed):
@@ -72,6 +78,8 @@ def compile_agent_review(packet,key):
     try:
         if _contract(packet)!=key.get('packet_contract_sha256'):
             raise ValueError('review contract changed')
+        if _key_contract(key)!=key.get('key_contract_sha256'):
+            raise ValueError('review key changed')
         reviewer=packet['reviewer']; reviewed_at=packet['reviewed_at']
         if not isinstance(reviewer,str) or not reviewer.strip() or not isinstance(reviewed_at,str): raise ValueError('reviewer and date required')
         date.fromisoformat(reviewed_at)
@@ -98,8 +106,18 @@ def compile_agent_review(packet,key):
                 raise ValueError('incomplete or invalid review')
             if valid_sources is not None and not set(sources)<=valid_sources: raise ValueError('unknown review source')
             outcomes.append({'task_id':pair[0],'condition':pair[1],'blind_id':item['blind_id'],'review':review})
-        tasks={task for task,_ in identities}
-        complete=sorted(task for task in tasks if all((task,c) in identities for c in ('none','baseline','role','switch')))
+        for entry in missing:
+            if not isinstance(entry,dict) or not isinstance(entry.get('task_id'),str) or entry.get('condition') not in ('none','baseline','role','switch') or not isinstance(entry.get('status'),str) or not entry['status']:
+                raise ValueError('invalid missing review key')
+            pair=(entry['task_id'],entry['condition'])
+            if pair in identities: raise ValueError('duplicate review key condition')
+            identities.add(pair)
+        all_tasks={task for task,_ in identities}
+        if any((task,condition) not in identities for task in all_tasks for condition in ('none','baseline','role','switch')):
+            raise ValueError('incomplete review key')
+        completed_identities={(outcome['task_id'],outcome['condition']) for outcome in outcomes}
+        tasks={task for task,_ in completed_identities}
+        complete=sorted(task for task in tasks if all((task,c) in completed_identities for c in ('none','baseline','role','switch')))
         return {'schema':'quix-agent-reviewed-outcomes-v1','reviewer':reviewer.strip(),'reviewed_at':reviewed_at,
             'reviewer_independence':'self-reported; not verified','packet_contract_sha256':key['packet_contract_sha256'],
             'outcomes':outcomes,'complete_pairs':complete,'missing':missing}

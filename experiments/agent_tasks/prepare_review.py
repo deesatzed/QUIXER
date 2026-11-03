@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import sqlite3
 from quix_knowledge.agent_review import prepare_agent_review, seal_review_packet, validate_review_sources
+from quix_knowledge.retrieval_study import verify_source_snapshot
 
 parser=argparse.ArgumentParser()
 parser.add_argument('run',help='completed actual-agent run directory')
@@ -22,6 +23,7 @@ retrieval_manifest_bytes=(root/'experiments/retrieval/manifest.json').read_bytes
 preparation=json.loads((study/'preparation.json').read_text())
 if preparation.get('manifest_sha256')!=hashlib.sha256(retrieval_manifest_bytes).hexdigest():
     raise ValueError('retrieval manifest changed')
+verify_source_snapshot(study,preparation,json.loads(retrieval_manifest_bytes))
 db=sqlite3.connect((study/'catalog.db').resolve().as_uri()+'?mode=ro',uri=True)
 db.row_factory=sqlite3.Row
 try:

@@ -78,3 +78,23 @@ def test_real_node_fixture_runner_participates_in_matched_comparison(tmp_path):
     assert query['fallback_reason'] is None
     assert query['results'][0]['id'] == sid
     assert query['physical_requests'] == 0
+
+
+def test_replayed_retrieval_rejects_modified_source_body(tmp_path):
+    import copy
+    from quix_knowledge.agent_study import validate_replay_evidence
+    from quix_knowledge.switch_comparison import run_switch_comparison
+    db=open_catalog(':memory:')
+    path=tmp_path/'doc.md'; path.write_text('# Retry\nRetry after timeout.'); ingest(db,path)
+    tasks=[{'id':'q','query':'retry','role':'reviewer','role_version':'1'}]
+    report=run_switch_comparison(db,tasks,switch_runner=lambda _: {'status':'insufficient_evidence','reason':'unknown','state':{'evidence':[]},'receipts':[]},packet_tokens=3000,count_tokens=len,tokenizer_name='fixture-characters')
+    validate_replay_evidence(db,report,tasks)
+    altered=copy.deepcopy(report)
+    altered['variants']['baseline']['queries']['q']['results'][0]['body']='invented evidence'
+    with pytest.raises(ValueError,match='evidence'):
+        validate_replay_evidence(db,altered,tasks)
+    altered=copy.deepcopy(report)
+    item=altered['variants']['baseline']['queries']['q']['results'][0]
+    item['body']=item['body'][:4]; item['body_truncated']=False
+    with pytest.raises(ValueError,match='truncat'):
+        validate_replay_evidence(db,altered,tasks)

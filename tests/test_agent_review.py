@@ -56,6 +56,20 @@ def test_review_compilation_rejects_incomplete_or_unknown_source():
         compile_agent_review(packet,key)
 
 
+def test_review_compilation_rejects_changed_condition_key_and_missing_run_list():
+    from quix_knowledge.agent_review import prepare_agent_review, compile_agent_review
+    report={'agent_kind':'actual','runs':[{'task_id':'t','condition':'none','status':'completed','output':'ok'}]}
+    packet,key=prepare_agent_review(report,[{'id':'t','query':'task'}],seed=1)
+    packet['reviewer']='reviewer'; packet['reviewed_at']='2026-11-03'
+    packet['items'][0]['review']={'correctness':'correct','source_support':'unknown','missing_evidence':'unknown','task_completion':'complete','explanation':'x','source_ids':[]}
+    altered=json.loads(json.dumps(key)); altered['missing'].pop()
+    with pytest.raises(ValueError,match='key'):
+        compile_agent_review(packet,altered)
+    altered=json.loads(json.dumps(key)); altered['conditions']['answer-001']['condition']='role'
+    with pytest.raises(ValueError,match='key'):
+        compile_agent_review(packet,altered)
+
+
 def test_outcome_review_rejects_changed_source_candidate_material(tmp_path):
     import sqlite3
     from pathlib import Path

@@ -4,6 +4,62 @@ from pathlib import Path
 import pytest
 
 
+def test_isolated_study_uses_copies_and_detects_snapshot_changes(tmp_path):
+    import shutil
+    import sqlite3
+    from quix_knowledge.hitm import _check_sources, SourceChanged
+    from quix_knowledge.retrieval_study import prepare_study
+    source_root=Path(__file__).resolve().parents[1]
+    manifest_path=source_root/'experiments/retrieval/manifest.json'
+    manifest=json.loads(manifest_path.read_text())
+    original=tmp_path/'original'; original.mkdir()
+    for source in manifest['sources']:
+        target=original/source['path']; target.parent.mkdir(parents=True,exist_ok=True)
+        shutil.copyfile(source_root/source['path'],target)
+    output=tmp_path/'study'
+    summary=prepare_study(original,manifest_path,output,isolated_sources=True)
+    db=sqlite3.connect(output/'catalog.db'); db.row_factory=sqlite3.Row
+    try:
+        paths=[Path(row['path']) for row in db.execute("select path from sources where status='current'")]
+        assert paths and all(path.is_relative_to(output) for path in paths)
+        assert summary['source_mode']=='isolated_copy'
+        assert len(summary['source_snapshot'])==len(manifest['sources'])
+        project=next(s for s in manifest['sources'] if s['kind']=='project')
+        (original/project['path']).write_text('original changed')
+        _check_sources(db)
+        (output/'source-snapshot'/project['path']).write_text('snapshot changed')
+        with pytest.raises(SourceChanged): _check_sources(db)
+    finally: db.close()
+
+
+def test_isolated_study_rejects_altered_nonindexed_template_before_running(tmp_path):
+    from quix_knowledge.retrieval_study import prepare_study, run_prepared_study
+    root=Path(__file__).resolve().parents[1]
+    manifest=root/'experiments/retrieval/manifest.json'
+    study=tmp_path/'study'; prepare_study(root,manifest,study,isolated_sources=True)
+    template=study/'source-snapshot/experiments/retrieval/fixtures/stale-original.txt'
+    template.write_text('tampered template')
+    output=tmp_path/'run'
+    with pytest.raises(ValueError,match='snapshot'):
+        run_prepared_study(root,manifest,study,output,switch_runner=lambda _: {},count_tokens=len,tokenizer_name='fixture',packet_tokens=10000)
+    assert not output.exists()
+
+
+def test_isolated_preparation_rechecks_templates_after_role_model_calls(tmp_path):
+    from quix_knowledge.retrieval_study import prepare_study
+    root=Path(__file__).resolve().parents[1]
+    output=tmp_path/'study'; count=0
+    def provider(*_):
+        nonlocal count
+        count+=1
+        if count==1:
+            (output/'source-snapshot/experiments/retrieval/fixtures/stale-original.txt').write_text('changed during scoring')
+        return {'outcome':'unclear','provider':'fixture','model':'fixture','probability':0.5}
+    with pytest.raises(ValueError,match='snapshot'):
+        prepare_study(root,root/'experiments/retrieval/manifest.json',output,isolated_sources=True,role_provider=provider,role_call_limit=56)
+    assert not (output/'blind-review-packet.json').exists()
+
+
 def test_preregistered_study_creates_blind_packet_with_lifecycle_fixtures(tmp_path):
     from quix_knowledge.retrieval_study import prepare_study
     root=Path(__file__).resolve().parents[1]
@@ -46,6 +102,7 @@ def test_unlabeled_study_run_uses_copy_and_reports_no_quality(tmp_path):
         return {'status':'complete','reason':None,'state':{'evidence':[{'id':candidate['id'],'text':candidate['body'],'truncated':candidate['body_truncated']}]},'receipts':[]}
     result=run_prepared_study(root,manifest,study,tmp_path/'run',switch_runner=switch,count_tokens=len,tokenizer_name='fixture-characters',packet_tokens=10000)
     assert result['manifest']['label_provenance']['kind'] == 'unreviewed'
+    assert result['manifest']['study']['source_mode']=='original_paths'
     assert result['variants']['baseline']['metrics']['unlabeled'] == 16
     assert result['variants']['switch']['metrics']['mean_recall'] is None
     assert hashlib.sha256((study/'catalog.db').read_bytes()).digest() == hashlib.sha256(original).digest()
