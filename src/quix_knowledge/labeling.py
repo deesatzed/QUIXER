@@ -1,5 +1,5 @@
 """Prepare blind source-bound review packets and validate returned labels."""
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import hashlib
 import json
 
@@ -78,13 +78,15 @@ def compile_review(db, packet):
         raise ValueError('candidate material changed')
     valid_ids = {item['id'] for item in expected}
     compiled = []
+    dated = undated = 0
     for task in tasks:
         labels = task.get('labels')
+        reviewed_at=task.get('reviewed_at')
         if type(task.get('reviewed')) is not bool:
             raise ValueError('each task needs a reviewed flag')
         if not task['reviewed']:
-            if labels is not None:
-                raise ValueError('unreviewed tasks must have null labels')
+            if labels is not None or reviewed_at is not None:
+                raise ValueError('unreviewed tasks must have null labels and review date')
         else:
             if not isinstance(labels,list) or any(not isinstance(x,str) or not x for x in labels) or len(set(labels)) != len(labels):
                 raise ValueError('reviewed labels must be unique IDs')
@@ -92,5 +94,14 @@ def compile_review(db, packet):
                 raise ValueError('unknown candidate ID')
             if not labels and (not isinstance(task.get('missing_reason'),str) or not task['missing_reason'].strip()):
                 raise ValueError('unanswerable task requires a reason')
-        compiled.append({key:task[key] for key in _TASK_FIELDS} | {'labels':labels,'missing_reason':task.get('missing_reason')})
-    return {'schema':'quix-reviewed-labels-v1','corpus_revision':packet['corpus_revision'],'include_proposed':packet['include_proposed'],'candidate_scope':scope,'tasks':compiled,'label_provenance':{'reviewer':reviewer.strip(),'compiled_at':datetime.now(timezone.utc).isoformat(),'identity_independence':'self-reported; not verified'}}
+            if reviewed_at is None:
+                undated+=1
+            else:
+                try:
+                    if not isinstance(reviewed_at,str) or date.fromisoformat(reviewed_at).isoformat()!=reviewed_at:
+                        raise ValueError
+                except ValueError:
+                    raise ValueError('invalid review date') from None
+                dated+=1
+        compiled.append({key:task[key] for key in _TASK_FIELDS} | {'labels':labels,'missing_reason':task.get('missing_reason'),'reviewed_at':reviewed_at})
+    return {'schema':'quix-reviewed-labels-v1','corpus_revision':packet['corpus_revision'],'include_proposed':packet['include_proposed'],'candidate_scope':scope,'tasks':compiled,'label_provenance':{'reviewer':reviewer.strip(),'compiled_at':datetime.now(timezone.utc).isoformat(),'identity_independence':'self-reported; not verified','reviewed_with_date':dated,'reviewed_without_date':undated,'review_date_semantics':'provided in packet; not independently verified'}}

@@ -20,6 +20,18 @@ def test_review_packet_is_blind_and_compiles_exact_candidate_labels(tmp_path):
     compiled=compile_review(db,packet)
     assert compiled['tasks'][0]['labels'] == [packet['candidates'][0]['id']]
     assert compiled['label_provenance']['reviewer'] == 'independent-reviewer'
+    assert compiled['tasks'][0]['reviewed_at'] is None
+    assert compiled['label_provenance']['reviewed_without_date']==1
+
+
+def test_invalid_review_date_is_not_silently_accepted(tmp_path):
+    db=open_catalog(':memory:')
+    path=tmp_path/'doc.md'; path.write_text('# Retry\nRetry later.'); ingest(db,path)
+    packet=prepare_review(db,[{'id':'q','query':'retry','role':'reviewer','role_version':'1'}]); packet['reviewer']='Reviewer'
+    packet['tasks'][0].update(reviewed=True,labels=[packet['candidates'][0]['id']],reviewed_at='2026-02-30')
+    with pytest.raises(ValueError,match='review date'): compile_review(db,packet)
+    packet['tasks'][0].update(reviewed=False,labels=None,reviewed_at='2026-11-03')
+    with pytest.raises(ValueError,match='unreviewed'): compile_review(db,packet)
 
 
 def test_review_rejects_catalog_change_or_unknown_candidate(tmp_path):
@@ -57,10 +69,12 @@ def test_reviewed_experiment_binds_labels_to_catalog_snapshot(tmp_path):
     ingest(db,path)
     packet=prepare_review(db,[{'id':'q','query':'retry','role':'reviewer','role_version':'1','split':'held_out'}])
     packet['reviewer']='reviewer'
-    packet['tasks'][0].update(reviewed=True,labels=[packet['candidates'][0]['id']])
+    packet['tasks'][0].update(reviewed=True,labels=[packet['candidates'][0]['id']],reviewed_at='2026-11-03')
     compiled=compile_review(db,packet)
     result=run_reviewed_experiment(db,compiled)
     assert result['variants']['baseline']['metrics_by_split']['held_out']['mean_recall'] == 1
+    assert result['manifest']['tasks'][0]['reviewed_at']=='2026-11-03'
+    assert result['manifest']['label_provenance']['reviewed_with_date']==1
     path.write_text('# Retry\nNever retry.')
     ingest(db,path)
     with pytest.raises(ValueError,match='catalog'):

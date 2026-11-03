@@ -92,9 +92,9 @@ try:
                 elif action=='mark' and session.kind=='retrieval':
                     ids=source_numbers(argument)
                     if not ids: raise ValueError('select at least one source; use none with a reason if unanswerable')
-                    session.record_retrieval(index,ids); print('Saved.'); break
+                    session.record_retrieval(index,ids,reviewed_at=args.date); print('Saved.'); break
                 elif action=='none' and session.kind=='retrieval':
-                    session.record_retrieval(index,[],missing_reason=argument); print('Saved.'); break
+                    session.record_retrieval(index,[],missing_reason=argument,reviewed_at=args.date); print('Saved.'); break
                 elif action=='review' and session.kind=='outcome':
                     session.record_outcome(index,outcome_review(),reviewed_at=args.date); print('Saved.'); break
                 elif action not in ('list','skip'): print('Unknown command.')

@@ -16,7 +16,7 @@ def _immutable(packet):
     result.pop('reviewer',None)
     if result.get('schema')=='quix-blind-review-v1':
         for item in result['tasks']:
-            for name in ('labels','reviewed','missing_reason'): item.pop(name,None)
+            for name in ('labels','reviewed','missing_reason','reviewed_at'): item.pop(name,None)
     elif result.get('schema')=='quix-agent-outcome-review-v1':
         result.pop('reviewed_at',None)
         for item in result['items']: item.pop('review',None)
@@ -62,11 +62,17 @@ class ReviewSession:
         finally:
             if path is not None and path.exists(): path.unlink()
 
-    def record_retrieval(self, index, labels, *, missing_reason=None):
+    def record_retrieval(self, index, labels, *, missing_reason=None, reviewed_at=None):
         if self.kind!='retrieval' or type(index) is not int or not 0 <= index < len(self.items): raise ValueError('invalid retrieval task')
         self._valid_sources(labels)
         if not labels and (not isinstance(missing_reason,str) or not missing_reason.strip()): raise ValueError('empty labels require a reason')
+        if reviewed_at is not None:
+            try:
+                if not isinstance(reviewed_at,str) or date.fromisoformat(reviewed_at).isoformat()!=reviewed_at: raise ValueError
+            except ValueError:
+                raise ValueError('invalid review date') from None
         self.items[index].update(labels=list(labels),reviewed=True,missing_reason=missing_reason.strip() if not labels else None)
+        self.items[index]['reviewed_at']=reviewed_at
         self._save()
 
     def record_outcome(self,index,review,*,reviewed_at):

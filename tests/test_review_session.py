@@ -29,6 +29,8 @@ def test_review_session_rejects_unknown_source_and_changed_draft(tmp_path):
         'tasks':[{'id':'q','query':'task','labels':None,'reviewed':False,'missing_reason':None}]}))
     session=ReviewSession(source,output,'Reviewer')
     with pytest.raises(ValueError,match='source'): session.record_retrieval(0,['invented'])
+    with pytest.raises(ValueError,match='date'): session.record_retrieval(0,['a'],reviewed_at='2026-02-30')
+    assert not output.exists()
     session.record_retrieval(0,['a'])
     altered=json.loads(output.read_text()); altered['candidates'][0]['body']='modified'; output.write_text(json.dumps(altered))
     with pytest.raises(ValueError,match='contract'): ReviewSession(source,output,'Reviewer')
@@ -115,10 +117,13 @@ def test_guided_retrieval_review_compiles_against_original_catalog(tmp_path):
     tasks=[{'id':'t','query':'What is in the source?','role':'reviewer','role_version':'1'}]
     packet=prepare_review(db,tasks,include_proposed=True,candidate_scope='sections_and_records')
     source=tmp_path/'packet.json'; output=tmp_path/'review.json'; source.write_text(json.dumps(packet))
-    result=subprocess.run([sys.executable,str(root/'experiments/guided_review.py'),str(source),str(output),'--reviewer','Fixture reviewer'],input='mark 1\n',text=True,capture_output=True,env=dict(os.environ,PYTHONPATH=str(root/'src')),timeout=10)
+    result=subprocess.run([sys.executable,str(root/'experiments/guided_review.py'),str(source),str(output),'--reviewer','Fixture reviewer','--date','2026-11-03'],input='mark 1\n',text=True,capture_output=True,env=dict(os.environ,PYTHONPATH=str(root/'src')),timeout=10)
     assert result.returncode==0
     compiled=compile_review(db,json.loads(output.read_text()))
     assert compiled['tasks'][0]['labels']==[packet['candidates'][0]['id']]
+    assert compiled['tasks'][0]['reviewed_at']=='2026-11-03'
+    assert compiled['label_provenance']['reviewed_with_date']==1
+    assert compiled['label_provenance']['reviewed_without_date']==0
     assert compiled['label_provenance']['identity_independence']=='self-reported; not verified'
     db.close()
 
