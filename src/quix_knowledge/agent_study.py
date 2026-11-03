@@ -67,7 +67,7 @@ def validate_replay_evidence(db,report,tasks):
                     raise ValueError('invalid replay agent evidence')
 
 
-def run_agent_study(tasks, *, context_provider, agent, seed, max_input_characters=12000, agent_kind='fixture', on_schedule=None, on_result=None):
+def run_agent_study(tasks, *, context_provider, agent, seed, max_input_characters=12000, agent_kind='fixture', on_schedule=None, on_result=None, role_definitions=None):
     if not isinstance(tasks,list) or not tasks or type(seed) is not int or type(max_input_characters) is not int or max_input_characters < 1:
         raise ValueError('invalid study configuration')
     fields=('id','query','role','role_version')
@@ -75,6 +75,10 @@ def run_agent_study(tasks, *, context_provider, agent, seed, max_input_character
         raise ValueError('invalid or duplicate tasks')
     if not callable(context_provider) or not callable(agent) or agent_kind not in ('fixture','actual') or (on_schedule is not None and not callable(on_schedule)) or (on_result is not None and not callable(on_result)):
         raise ValueError('invalid study adapters')
+    if role_definitions is not None:
+        from .agent_process import validate_role_bindings
+        validate_role_bindings(tasks,role_definitions)
+        role_definitions=copy.deepcopy(role_definitions)
     rng=random.Random(seed)
     schedule=[]
     for task in tasks:
@@ -99,11 +103,16 @@ def run_agent_study(tasks, *, context_provider, agent, seed, max_input_character
             else:
                 request={'task_id':task['id'],'query':task['query'],'role':task['role'],'role_version':task['role_version'],
                     'context':context,'max_input_characters':max_input_characters}
-                if len(json.dumps(request,ensure_ascii=False,separators=(',',':'))) > max_input_characters:
+                if role_definitions is not None:
+                    request['role_purpose']=role_definitions[task['role']]['purpose']
+                serialized_request=json.dumps(request,ensure_ascii=False,separators=(',',':'))
+                record['study_request_characters']=len(serialized_request)
+                record['study_request_sha256']=hashlib.sha256(serialized_request.encode('utf-8')).hexdigest()
+                if len(serialized_request) > max_input_characters:
                     record['status']='input_budget_exceeded'
                 else:
                     response=agent(request)
-                    if isinstance(response,dict) and response.get('status') in {'invalid_request','configuration_missing','agent_failure','intent_too_large','task_mismatch','source_changed','context_invalid','unsupported_or_stale_evidence','input_budget_exceeded','process_failure','invalid_response','executable_changed'}:
+                    if isinstance(response,dict) and response.get('status') in {'invalid_request','configuration_missing','agent_failure','intent_too_large','task_mismatch','source_changed','context_invalid','unsupported_or_stale_evidence','role_definition_mismatch','input_budget_exceeded','process_failure','invalid_response','executable_changed'}:
                         record['status']=response['status']; record['call']=response.get('call')
                         cost=(record['call'] or {}).get('costUSD') if isinstance(record['call'],dict) else None
                         if isinstance(cost,(int,float)) and not isinstance(cost,bool) and math.isfinite(cost) and cost>=0:

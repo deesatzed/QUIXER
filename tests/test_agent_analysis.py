@@ -102,6 +102,37 @@ def test_retrieval_costs_are_separate_and_missing_usage_remains_unknown():
     assert result['role_indexing']['reported_cost']==pytest.approx(0.04)
 
 
+def test_recorded_role_purposes_must_match_frozen_role_definitions():
+    from quix_knowledge.agent_analysis import validate_recorded_role_definitions
+    tasks=[{'id':'t','query':'task','role':'reviewer','role_version':'1'}]
+    roles={'reviewer':{'version':'1','purpose':'Review evidence.'}}
+    report={'manifest':{'planner_role_purpose_included':True,'planner_prompt_contract':'quix-planner-role-purpose-v1','role_definitions':roles}}
+    assert validate_recorded_role_definitions(report,tasks,roles)=='recorded'
+    assert validate_recorded_role_definitions({'manifest':{}},tasks,roles)=='not_recorded'
+    altered=copy.deepcopy(report); altered['manifest']['role_definitions']['reviewer']['purpose']='Different purpose.'
+    with pytest.raises(ValueError,match='role'):
+        validate_recorded_role_definitions(altered,tasks,roles)
+
+
+def test_request_hashes_bind_role_purpose_and_full_study_input():
+    from quix_knowledge.agent_analysis import validate_study_requests
+    from quix_knowledge.agent_study import run_agent_study
+    tasks=[{'id':'t','query':'task','role':'reviewer','role_version':'1'}]
+    roles={'reviewer':{'version':'1','purpose':'Review evidence.'}}
+    report=run_agent_study(tasks,context_provider=lambda *_:{'fixture':'context'},agent=lambda _: {'output':'fixture'},seed=1,role_definitions=roles)
+    report['manifest']={'planner_role_purpose_included':True,'role_definitions':roles}
+    packets=[{'task_id':'t','condition':c,'packet':{'fixture':'context'}} for c in ('baseline','role','switch')]
+    assert validate_study_requests(report,packets,tasks)=='verified'
+    altered=copy.deepcopy(report); altered['manifest']['role_definitions']['reviewer']['purpose']='Changed purpose.'
+    with pytest.raises(ValueError,match='request'):
+        validate_study_requests(altered,packets,tasks)
+    old=copy.deepcopy(report)
+    for row in old['runs']:
+        row.pop('study_request_sha256'); row.pop('study_request_characters')
+    old['manifest']={}
+    assert validate_study_requests(old,packets,tasks)=='not_recorded'
+
+
 def test_reconstruct_saved_agent_packets_from_verified_retrieval(tmp_path):
     from quix_knowledge.agent_context import build_agent_packets
     from quix_knowledge.ingest import ingest

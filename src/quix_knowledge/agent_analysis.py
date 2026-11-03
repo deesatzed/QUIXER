@@ -6,6 +6,7 @@ import json
 import math
 
 from .agent_review import compile_agent_review, prepare_agent_review
+from .agent_process import validate_role_bindings
 from .agent_study import CONDITIONS
 
 
@@ -14,6 +15,50 @@ def _number_or_unknown(value,name):
     if isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(value) or value < 0:
         raise ValueError(f'invalid recorded {name}')
     return value
+
+
+def validate_recorded_role_definitions(report,tasks,expected_roles):
+    """Keep legacy unrecorded role purposes distinct from verified new metadata."""
+    manifest=report.get('manifest',{})
+    marker=manifest.get('planner_role_purpose_included')
+    if marker is None:
+        return 'not_recorded'
+    if marker is not True or manifest.get('planner_prompt_contract')!='quix-planner-role-purpose-v1' or manifest.get('role_definitions')!=expected_roles:
+        raise ValueError('recorded role definitions differ from study')
+    validate_role_bindings(tasks,expected_roles)
+    return 'recorded'
+
+
+def validate_study_requests(report,packets,tasks):
+    """Reconstruct serialized study requests, including any recorded role purpose."""
+    runs=report.get('runs',[])
+    if not any('study_request_sha256' in run for run in runs):
+        if report.get('manifest',{}).get('planner_role_purpose_included') is True:
+            raise ValueError('role-purpose study request hashes are missing')
+        return 'not_recorded'
+    task_by_id={task['id']:task for task in tasks}
+    by_identity={(row['task_id'],row['condition']):row['packet'] for row in packets}
+    maximum=report.get('max_input_characters')
+    if type(maximum) is not int or maximum<1: raise ValueError('invalid study request budget')
+    roles=report.get('manifest',{}).get('role_definitions') if report.get('manifest',{}).get('planner_role_purpose_included') is True else None
+    if roles is not None: validate_role_bindings(tasks,roles)
+    before_request={'context_unavailable','adapter_error','missing'}
+    for run in runs:
+        digest=run.get('study_request_sha256')
+        if digest is None:
+            if run.get('status') not in before_request: raise ValueError('study request record missing')
+            continue
+        task=task_by_id.get(run.get('task_id')); condition=run.get('condition')
+        if task is None or condition not in CONDITIONS: raise ValueError('invalid study request identity')
+        context=None if condition=='none' else by_identity.get((task['id'],condition))
+        if condition!='none' and context is None: raise ValueError('study request context missing')
+        request={'task_id':task['id'],'query':task['query'],'role':task['role'],'role_version':task['role_version'],
+            'context':context,'max_input_characters':maximum}
+        if roles is not None: request['role_purpose']=roles[task['role']]['purpose']
+        encoded=json.dumps(request,ensure_ascii=False,separators=(',',':'))
+        if run.get('study_request_characters')!=len(encoded) or digest!=hashlib.sha256(encoded.encode('utf-8')).hexdigest():
+            raise ValueError('study request differs from recorded input')
+    return 'verified'
 
 
 def validate_recorded_packets(report,packets,tasks):

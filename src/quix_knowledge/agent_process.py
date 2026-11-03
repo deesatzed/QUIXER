@@ -1,5 +1,6 @@
 """Run the isolated HITMCockpit planner executable as a bounded child process."""
 import json
+import copy
 import hashlib
 import os
 from pathlib import Path
@@ -10,8 +11,24 @@ import tempfile
 _STATUSES={'invalid_request','configuration_missing','agent_failure','intent_too_large','task_mismatch','source_changed','context_invalid','unsupported_or_stale_evidence'}
 
 
+def validate_role_bindings(tasks, definitions):
+    if not isinstance(tasks,list) or not isinstance(definitions,dict) or not definitions:
+        raise ValueError('invalid role definitions')
+    for role,definition in definitions.items():
+        if not isinstance(role,str) or not role.strip() or not isinstance(definition,dict):
+            raise ValueError('invalid role definition')
+        version=definition.get('version'); purpose=definition.get('purpose')
+        if not isinstance(version,str) or not version.strip() or not isinstance(purpose,str) or not purpose.strip() or len(purpose)>500:
+            raise ValueError('invalid role definition')
+        try: purpose.encode('utf-8')
+        except UnicodeError: raise ValueError('invalid role purpose encoding') from None
+    for task in tasks:
+        if not isinstance(task,dict) or task.get('role') not in definitions or task.get('role_version')!=definitions[task['role']]['version']:
+            raise ValueError('task role definition mismatch')
+
+
 class PlannerProcess:
-    def __init__(self, command, *, api_key, model, timeout=60):
+    def __init__(self, command, *, api_key, model, timeout=60, role_definitions=None):
         if not isinstance(command,list) or not command or not all(isinstance(x,str) and x for x in command) or not api_key or not model or not 0 < timeout <= 120:
             raise ValueError('invalid process configuration')
         self.command=list(command)
@@ -26,9 +43,17 @@ class PlannerProcess:
         self._key=api_key
         self.model=model
         self.timeout=timeout
+        if role_definitions is not None:
+            validate_role_bindings([],role_definitions)
+        self.role_definitions=copy.deepcopy(role_definitions)
 
     def __call__(self, request):
         payload={'task':request['query'],'role':request['role'],'role_version':request['role_version'],'packet':request['context']}
+        if self.role_definitions is not None:
+            definition=self.role_definitions.get(request['role'])
+            if not definition or definition['version']!=request['role_version'] or request.get('role_purpose',definition['purpose'])!=definition['purpose']:
+                return {'status':'role_definition_mismatch'}
+            payload['role_purpose']=definition['purpose']
         raw=json.dumps(payload,ensure_ascii=False,separators=(',',':')).encode()
         if len(raw)>500_000:
             return {'status':'input_budget_exceeded'}

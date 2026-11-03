@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import sqlite3
 
-from quix_knowledge.agent_analysis import analyze_agent_outcomes, validate_recorded_packets, summarize_retrieval_accounting
+from quix_knowledge.agent_analysis import analyze_agent_outcomes, validate_recorded_packets, summarize_retrieval_accounting, validate_recorded_role_definitions, validate_study_requests
 from quix_knowledge.agent_context import build_agent_packets
 from quix_knowledge.agent_review import validate_review_sources
 from quix_knowledge.agent_study import validate_agent_manifest, validate_retrieval_replay, validate_replay_evidence
@@ -30,6 +30,7 @@ if report.get('manifest',{}).get('sha256')!=hashlib.sha256(agent_manifest_bytes)
     raise ValueError('agent manifest differs from recorded run')
 retrieval_manifest_bytes=(root/'experiments/retrieval/manifest.json').read_bytes()
 retrieval_manifest=json.loads(retrieval_manifest_bytes)
+role_purpose_status=validate_recorded_role_definitions(report,agent_manifest['tasks'],retrieval_manifest['roles'])
 preparation=json.loads((study/'preparation.json').read_text(encoding='utf-8'))
 if preparation.get('manifest_sha256')!=hashlib.sha256(retrieval_manifest_bytes).hexdigest():
     raise ValueError('retrieval manifest differs from preparation')
@@ -45,6 +46,7 @@ if replay_hash is not None and replay_hash!=hashlib.sha256(retrieval_bytes).hexd
 validate_retrieval_replay(comparison,agent_manifest['tasks'],revision)
 packets=json.loads((run/'packets.json').read_text(encoding='utf-8'))
 validate_recorded_packets(report,packets,agent_manifest['tasks'])
+request_hash_status=validate_study_requests(report,packets,agent_manifest['tasks'])
 db=sqlite3.connect((study/'catalog.db').resolve().as_uri()+'?mode=ro',uri=True)
 db.row_factory=sqlite3.Row
 try:
@@ -76,6 +78,8 @@ analysis['source_verification']={'catalog_current_at_analysis':True,
     'note':'Point-in-time source checks; PDF extracted text and agent claims are not independently verified.'}
 analysis['experiment']={'corpus_revision':revision,'agent_manifest_sha256':report['manifest']['sha256'],
     'model':report['manifest'].get('model'),'reused_retrieval_report_sha256':replay_hash,
+    'planner_role_purpose_status':role_purpose_status,'planner_prompt_contract':report['manifest'].get('planner_prompt_contract'),
+    'study_request_hash_status':request_hash_status,
     'retrieval_and_indexing':summarize_retrieval_accounting(comparison,preparation)}
 with Path(args.output).open('x',encoding='utf-8') as stream:
     json.dump(analysis,stream,ensure_ascii=False,indent=2)

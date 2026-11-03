@@ -152,3 +152,38 @@ def test_planner_process_preserves_unsupported_or_stale_evidence_status(tmp_path
     agent=PlannerProcess([sys.executable,str(script)],api_key='key',model='test',timeout=5)
     result=agent({'query':'task','role':'reviewer','role_version':'1','context':None})
     assert result['status']=='unsupported_or_stale_evidence'
+
+
+def test_planner_process_sends_versioned_role_purpose_and_refuses_mismatch(tmp_path):
+    import sys
+    from quix_knowledge.agent_process import PlannerProcess, validate_role_bindings
+    definitions={'reviewer':{'version':'1','purpose':'Review source evidence.'}}
+    tasks=[{'id':'t','query':'task','role':'reviewer','role_version':'1'}]
+    validate_role_bindings(tasks,definitions)
+    with pytest.raises(ValueError,match='role'):
+        validate_role_bindings([dict(tasks[0],role_version='2')],definitions)
+    script=tmp_path/'agent.py'
+    script.write_text('import json,sys\nq=json.load(sys.stdin)\nassert q["role_purpose"] == "Review source evidence."\nprint(json.dumps({"status":"completed","proposal":{"title":"ok"}}))\n')
+    planner=PlannerProcess([sys.executable,str(script)],api_key='key',model='test',timeout=5,role_definitions=definitions)
+    request={'query':'task','role':'reviewer','role_version':'1','context':None}
+    assert json.loads(planner(request)['output'])['title']=='ok'
+    assert planner(dict(request,role_version='2'))['status']=='role_definition_mismatch'
+    definitions['reviewer']['purpose']='changed after configuration'
+    assert json.loads(planner(request)['output'])['title']=='ok'
+
+
+def test_study_role_purpose_is_identical_in_all_conditions_and_counted_in_input_budget():
+    from quix_knowledge.agent_study import run_agent_study
+    role_definitions={'reviewer':{'version':'1','purpose':'Review source evidence.'}}
+    tasks=[{'id':'t','query':'task','role':'reviewer','role_version':'1'}]
+    seen=[]
+    def agent(request):
+        seen.append(request)
+        return {'output':'synthetic'}
+    report=run_agent_study(tasks,context_provider=lambda *_:{},agent=agent,seed=3,role_definitions=role_definitions)
+    assert len(seen)==4 and all(x['role_purpose']=='Review source evidence.' for x in seen)
+    assert all(isinstance(row['study_request_sha256'],str) and len(row['study_request_sha256'])==64 for row in report['runs'])
+    long_role={'reviewer':{'version':'1','purpose':'x'*300}}
+    seen.clear()
+    limited=run_agent_study(tasks,context_provider=lambda *_:{},agent=agent,seed=3,role_definitions=long_role,max_input_characters=300)
+    assert not seen and all(row['status']=='input_budget_exceeded' for row in limited['runs'])
