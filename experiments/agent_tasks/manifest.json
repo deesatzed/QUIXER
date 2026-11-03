@@ -1,6 +1,6 @@
 {
   "schema": "quix-agent-study-manifest-v1",
-  "status": "fixture-only; real agent and independent review pending",
+  "status": "exploratory tasks; independent review pending",
   "seed": 174,
   "max_input_characters": 12000,
   "conditions": ["none", "baseline", "role", "switch"],

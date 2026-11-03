@@ -1,0 +1,7 @@
+# Independent agent-output review
+
+Generate `outcome-review.json` and its separate `outcome-key.json` using `prepare_review.py`. Give the reviewer only the review packet and the pinned source corpus; withhold the key, retrieval reports and prior outputs. The packet shuffles completed responses and does not deliberately disclose the retrieval condition, although a response or its citations may reveal clues. Failed or missing runs are counted in the separate key and must remain in the final analysis.
+
+For each output, inspect the task, response and supplied source candidates. Fill the `review` object using `review-schema.json`. Assess correctness, support for cited claims, missing material evidence, and whether the requested task was completed. Use `unknown` when evidence is insufficient and add a brief explanation with relevant source IDs. Record your identity and review date in the packet. The recorded identity is self-reported; this software does not establish independence. Do not interpret an agent's own claims or a model-authored review as independent verification.
+
+The source list includes explicitly synthetic records. A source-linked agent finding is still a claim, not proof that its text is correct; check the cited source. Exact section IDs can identify a document, but truncated context may omit the evidence the agent needed. Compare conditions only after the review is complete and the key is released, including missing runs and small-sample limitations.

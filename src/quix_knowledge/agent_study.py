@@ -1,5 +1,6 @@
 """Isolated paired agent-study orchestration; injected functions own all I/O."""
 import json
+import hashlib
 import math
 import random
 import time
@@ -27,6 +28,11 @@ def run_agent_study(tasks, *, context_provider, agent, seed, max_input_character
         record={**entry,'status':'error','output':None,'reported_cost':None,'usage':None}
         try:
             context=None if condition=='none' else context_provider(dict(task),condition)
+            if isinstance(context,dict):
+                serialized=json.dumps(context,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode('utf-8')
+                record['context_provenance']={'packet_sha256':hashlib.sha256(serialized).hexdigest(),
+                    'catalog_fingerprint':context.get('catalog_fingerprint'),'omitted_count':context.get('omitted_count'),
+                    'sources':[{key:item.get(key) for key in ('id','revision','path')} for item in context.get('results',[]) if isinstance(item,dict)]}
             if condition!='none' and context is None:
                 record['status']='context_unavailable'
             else:
@@ -36,10 +42,16 @@ def run_agent_study(tasks, *, context_provider, agent, seed, max_input_character
                     record['status']='input_budget_exceeded'
                 else:
                     response=agent(request)
-                    if not isinstance(response,dict) or not isinstance(response.get('output'),str):
+                    if isinstance(response,dict) and response.get('status') in {'invalid_request','configuration_missing','agent_failure','intent_too_large','task_mismatch','source_changed','context_invalid','input_budget_exceeded','process_failure','invalid_response'}:
+                        record['status']=response['status']; record['call']=response.get('call')
+                        cost=(record['call'] or {}).get('costUSD') if isinstance(record['call'],dict) else None
+                        if isinstance(cost,(int,float)) and not isinstance(cost,bool) and math.isfinite(cost) and cost>=0:
+                            record['reported_cost']=cost
+                    elif not isinstance(response,dict) or not isinstance(response.get('output'),str):
                         record['status']='invalid_response'
                     else:
                         record['status']='completed'; record['output']=response['output']; record['usage']=response.get('usage')
+                        record['call']=response.get('call')
                         cost=(response.get('usage') or {}).get('cost') if isinstance(response.get('usage'),dict) else None
                         if isinstance(cost,(int,float)) and not isinstance(cost,bool) and math.isfinite(cost) and cost>=0:
                             record['reported_cost']=cost
