@@ -340,3 +340,39 @@ test('a bounded initial set retains all other candidates for broadening', () => 
 test('project snapshot refuses a missing source rather than silently narrowing the corpus', () => {
   assert.throws(()=>projectSnapshot(['/nonexistent/quix-missing-file.md']),/temporary catalog setup failed/);
 });
+
+test('bounded choices page through all candidates and distinguish duplicate titles', async () => {
+  const candidates=Array.from({length:15},(_,i)=>({id:`id-${i.toString().padStart(2,'0')}`,title:'Same title',body:`source body ${i}`,record_type:'section',source_status:'current',path:'/tmp/unread',revision:'a'.repeat(64),start_line:1,end_line:1,topics:[],tier:'initial'}));
+  const snapshot={version:1,task:'source',role:'reviewer',role_version:'1',catalog_fingerprint:'fixture',max_steps:4,max_characters:5000,choice_mode:'bounded-v1',candidates};
+  const seen=new Set<string>();
+  const decider=fakeDecider((request,call)=>{
+    const q=request.decisionQuestions['pick']; assert.equal(q?.type,'choice');
+    const options=Object.entries(q.criteria); assert.ok(options.length<=9);
+    for (const [,text] of options) if (text.startsWith('Inspect passage')) {
+      const id=text.match(/source (id-\d+)/)?.[1]; assert.ok(id); seen.add(id);
+      assert.match(text,/source body/);
+    }
+    const desired=call<3?'Next candidates':'Stop';
+    const label=options.find(([,text])=>text.startsWith(desired))?.[0]; assert.ok(label);
+    return answered({pick:{type:'choice',choice:label,probabilities:{[label]:1},confidence:1}});
+  });
+  await navigate(snapshot,decider);
+  assert.equal(seen.size,15);
+});
+
+test('bounded pages expose the final candidate within the maximum step budget', async () => {
+  const candidates=Array.from({length:100},(_,i)=>({id:`id-${i.toString().padStart(3,'0')}`,title:'Candidate',body:'matching source',record_type:'section',source_status:'current',path:'/tmp/unread',revision:'a'.repeat(64),start_line:1,end_line:1,topics:[],tier:'initial'}));
+  const snapshot={version:1,task:'matching',role:'reviewer',role_version:'1',catalog_fingerprint:'fixture',max_steps:20,max_model_calls:20,max_characters:5000,choice_mode:'bounded-v1',candidates};
+  let lastSeen=false;
+  const decider=fakeDecider(request=>{
+    const q=request.decisionQuestions['pick']; assert.equal(q?.type,'choice');
+    const options=Object.entries(q.criteria);
+    if (options.some(([,text])=>text.includes('source id-099'))) lastSeen=true;
+    const label=options.find(([,text])=>text.startsWith(lastSeen?'Stop':'Next candidates'))?.[0]; assert.ok(label);
+    return answered({pick:{type:'choice',choice:label,probabilities:{[label]:1},confidence:1}});
+  });
+  const result=await navigate(snapshot,decider);
+  assert.equal(lastSeen,true);
+  assert.equal(result.reason,'no_evidence');
+  assert.ok(decider.requests.length<=20);
+});

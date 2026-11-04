@@ -65,3 +65,18 @@ def test_matched_snapshot_uses_same_sections_and_records_as_experiment(tmp_path)
     snapshot = build_snapshot(db,task='retry',role='reviewer',role_version='1',max_steps=5,max_characters=5000,include_proposed=True,matched_candidates=True)
     assert {c['id'] for c in snapshot['candidates']} == {section,'f1'}
     assert snapshot['candidate_scope'] == 'sections_and_records'
+
+
+def test_snapshot_can_select_bounded_choices_without_changing_candidates(tmp_path):
+    from quix_knowledge.store import open_catalog
+    from quix_knowledge.ingest import ingest
+    from quix_knowledge.switch_snapshot import build_snapshot
+    db=open_catalog(':memory:')
+    path=tmp_path/'source.md'; path.write_text('# Topic\nUseful body.')
+    ingest(db,path)
+    kwargs=dict(task='useful',role='reviewer',role_version='1',max_steps=5,max_characters=5000)
+    legacy=build_snapshot(db,**kwargs)
+    bounded=build_snapshot(db,choice_mode='bounded-v1',**kwargs)
+    assert 'choice_mode' not in legacy
+    assert bounded['choice_mode']=='bounded-v1'
+    assert bounded['candidates']==legacy['candidates']

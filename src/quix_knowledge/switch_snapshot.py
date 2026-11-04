@@ -4,13 +4,15 @@ from .retrieve import tokens
 from .store import corpus_fingerprint, validate_retrievable_ids
 
 
-def build_snapshot(db, *, task, role, role_version, max_steps, max_characters, max_model_calls=20, include_proposed=False, matched_candidates=False):
+def build_snapshot(db, *, task, role, role_version, max_steps, max_characters, max_model_calls=20, include_proposed=False, matched_candidates=False, choice_mode=None):
     if not all(isinstance(x,str) and x.strip() for x in (task,role,role_version)):
         raise ValueError('task, role and role version are required')
     if len(task)>1000 or len(role)>200 or len(role_version)>100:
         raise ValueError('request text exceeds snapshot limits')
     if type(max_steps) is not int or not 1 <= max_steps <= 20 or type(max_model_calls) is not int or not 1 <= max_model_calls <= 60 or type(max_characters) is not int or not 256 <= max_characters <= 100000 or type(include_proposed) is not bool or type(matched_candidates) is not bool:
         raise ValueError('invalid snapshot budget or proposal scope')
+    if choice_mode not in (None,'bounded-v1'):
+        raise ValueError('invalid switch choice mode')
     _check_sources(db)
     validate_retrievable_ids(db)
     fingerprint = corpus_fingerprint(db)
@@ -71,4 +73,6 @@ def build_snapshot(db, *, task, role, role_version, max_steps, max_characters, m
     _check_sources(db)
     if corpus_fingerprint(db) != fingerprint:
         raise ValueError('catalog changed during snapshot')
-    return dict(version=1,task=task,role=role,role_version=role_version,catalog_fingerprint=fingerprint,max_steps=max_steps,max_model_calls=max_model_calls,max_characters=max_characters,candidate_scope='sections_and_records' if matched_candidates else 'variant_specific',candidates=candidates)
+    result=dict(version=1,task=task,role=role,role_version=role_version,catalog_fingerprint=fingerprint,max_steps=max_steps,max_model_calls=max_model_calls,max_characters=max_characters,candidate_scope='sections_and_records' if matched_candidates else 'variant_specific',candidates=candidates)
+    if choice_mode is not None: result['choice_mode']=choice_mode
+    return result

@@ -34,7 +34,8 @@ def replay_saved_trace(catalog,report_path,task_id,*,node,script,timeout=30):
                 raise ValueError('catalog differs from recorded corpus')
             snapshot=build_snapshot(db,task=task['query'],role=task['role'],role_version=task['role_version'],
                 max_steps=config['max_steps'],max_model_calls=config['max_model_calls'],max_characters=config['view_characters'],
-                include_proposed=manifest['include_proposed'],matched_candidates=scope=='sections_and_records')
+                include_proposed=manifest['include_proposed'],matched_candidates=scope=='sections_and_records',
+                choice_mode=None if config.get('choice_mode','legacy')=='legacy' else config.get('choice_mode'))
             payload=json.dumps({'snapshot':snapshot,'trace':trace},ensure_ascii=False,separators=(',',':')).encode()
             if len(payload)>24_000_000: raise ValueError('replay input exceeds limit')
             env={'PATH':os.environ.get('PATH','/usr/bin:/bin')}

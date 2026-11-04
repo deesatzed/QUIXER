@@ -187,3 +187,36 @@ def test_study_role_purpose_is_identical_in_all_conditions_and_counted_in_input_
     seen.clear()
     limited=run_agent_study(tasks,context_provider=lambda *_:{},agent=agent,seed=3,role_definitions=long_role,max_input_characters=300)
     assert not seen and all(row['status']=='input_budget_exceeded' for row in limited['runs'])
+
+
+def test_agent_retrieval_comparison_requires_and_uses_decision_provider(tmp_path):
+    from quix_knowledge.agent_study import run_agent_retrieval_comparison
+    from quix_knowledge.store import open_catalog
+    from quix_knowledge.ingest import ingest
+    db=open_catalog(':memory:')
+    path=tmp_path/'source.md'; path.write_text('# Retry\nRetry after a timeout.')
+    ingest(db,path)
+    task={'id':'q','query':'retry timeout','role':'reviewer','role_version':'1'}
+    calls=[]
+    def provider(state,question):
+        calls.append((state,question))
+        return {'outcome':'unclear','provider':'fixture','usage':{'cost':0.01}}
+    def switch(snapshot):
+        return {'status':'insufficient_evidence','reason':'fixture','state':{'evidence':[]},'receipts':[]}
+    with pytest.raises(ValueError,match='decision provider'):
+        run_agent_retrieval_comparison(db,[task],switch_runner=switch,count_tokens=len,provider=None)
+    report=run_agent_retrieval_comparison(db,[task],switch_runner=switch,count_tokens=len,provider=provider)
+    assert report['manifest']['provider_configured'] is True
+    assert report['manifest']['switch']['max_steps'] == 20
+    assert report['manifest']['switch']['max_model_calls'] == 20
+    assert any(question=='relevant' for _,question in calls)
+    assert report['variants']['decision']['queries']['q']['decision_calls'] > 0
+    assert report['variants']['decision']['queries']['q']['results']
+
+
+def test_replayed_provider_status_is_reported_without_inference():
+    from quix_knowledge.agent_study import retrieval_provider_provenance
+    assert retrieval_provider_provenance({'manifest':{'provider_configured':False,'provider':None}})=={'configured':False,'provider':None}
+    provider={'configured_model':'test/decision','thresholds':None}
+    assert retrieval_provider_provenance({'manifest':{'provider_configured':True,'provider':provider}})=={'configured':True,'provider':provider}
+    with pytest.raises(ValueError): retrieval_provider_provenance({'manifest':{'provider_configured':True,'provider':None}})

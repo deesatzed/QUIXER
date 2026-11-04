@@ -10,12 +10,12 @@ import sqlite3
 import tiktoken
 from quix_knowledge.agent_context import build_agent_packets
 from quix_knowledge.agent_process import PlannerProcess, validate_role_bindings
-from quix_knowledge.agent_study import run_agent_study, validate_agent_manifest, validate_retrieval_replay, validate_replay_evidence
+from quix_knowledge.agent_study import run_agent_study, validate_agent_manifest, validate_retrieval_replay, validate_replay_evidence, run_agent_retrieval_comparison, retrieval_provider_provenance
 from quix_knowledge.hitm import _check_sources
-from quix_knowledge.openrouter import load_settings
+from quix_knowledge.openrouter import load_settings, OpenRouterDecision
 from quix_knowledge.retrieval_study import verify_source_snapshot
 from quix_knowledge.store import open_catalog, corpus_fingerprint
-from quix_knowledge.switch_comparison import NodeSwitchRunner, run_switch_comparison
+from quix_knowledge.switch_comparison import NodeSwitchRunner
 
 parser=argparse.ArgumentParser()
 parser.add_argument('study',help='prepared retrieval study directory')
@@ -66,7 +66,7 @@ try:
         if not node: raise RuntimeError('node unavailable')
         runner=NodeSwitchRunner(node,root/'experiments/switch-navigation/src/compare.ts',mode='openrouter',env_file=args.env_file,model_slot=args.decision_slot)
         encoding=tiktoken.get_encoding('cl100k_base')
-        comparison=run_switch_comparison(db,manifest['tasks'],switch_runner=runner,packet_tokens=2000,count_tokens=lambda x:len(encoding.encode(x)),tokenizer_name='cl100k_base',limit=3,provider=None,include_proposed=True,ranking='bm25')
+        comparison=run_agent_retrieval_comparison(db,manifest['tasks'],switch_runner=runner,count_tokens=lambda x:len(encoding.encode(x)),provider=OpenRouterDecision(load_settings(args.env_file,args.decision_slot)))
     if comparison['manifest']['corpus_revision'] != prep['corpus_revision']:
         raise RuntimeError('prepared catalog changed')
     (output/'retrieval-report.json').write_text(json.dumps(comparison,ensure_ascii=False,indent=2))
@@ -90,6 +90,7 @@ try:
         'role_definitions':role_definitions,'planner_role_purpose_included':True,'planner_prompt_contract':'quix-planner-role-purpose-v1',
         'planner_intent_limit_unicode_scalars':2000,'context_body_character_limit':args.body_characters,'context_result_limit':args.result_limit,
         'retrieval_packet_token_limit':2000,'retrieval_tokenizer':'cl100k_base','decision_slot':args.decision_slot,
+        'retrieval_provider':retrieval_provider_provenance(comparison),
         'limitations':'Exploratory shared corpus; no independent labels, no agent outcome review; provider/model input budgets are not matched across retrieval policies. Costs and failures are per call; local compute unknown.'}
     (output/'agent-report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2))
     print(json.dumps({'runs':len(report['runs']),'statuses':{status:sum(x['status']==status for x in report['runs']) for status in sorted({x['status'] for x in report['runs']})},'output':str(output)}))

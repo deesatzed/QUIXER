@@ -73,16 +73,16 @@ def _usage(receipts):
     return sum(values)
 
 
-def run_switch_comparison(db, tasks, *, switch_runner, packet_tokens, count_tokens, tokenizer_name, limit=3, provider=None, include_proposed=False, ranking='bm25', label_provenance=None, switch_view_characters=5000, switch_max_steps=5, switch_max_model_calls=10):
+def run_switch_comparison(db, tasks, *, switch_runner, packet_tokens, count_tokens, tokenizer_name, limit=3, provider=None, include_proposed=False, ranking='bm25', label_provenance=None, switch_view_characters=5000, switch_max_steps=5, switch_max_model_calls=10, switch_choice_mode=None):
     if not callable(switch_runner):
         raise ValueError('a switch runner is required')
     report = run_experiment(db,tasks,provider=provider,context_chars=None,packet_tokens=packet_tokens,count_tokens=count_tokens,tokenizer_name=tokenizer_name,limit=limit,include_proposed=include_proposed,ranking=ranking,label_provenance=label_provenance,matched_candidates=True)
     fingerprint = report['manifest']['corpus_revision']
-    report['manifest']['switch'] = {'view_characters':switch_view_characters,'max_steps':switch_max_steps,'max_model_calls':switch_max_model_calls,'fallback':'baseline','packet_budget_matches':True,'full_model_prompt_budget_matches':False}
+    report['manifest']['switch'] = {'view_characters':switch_view_characters,'max_steps':switch_max_steps,'max_model_calls':switch_max_model_calls,'fallback':'baseline','packet_budget_matches':True,'full_model_prompt_budget_matches':False,'choice_mode':switch_choice_mode or 'legacy'}
     labels = {task['id']:task.get('labels') for task in tasks}
     queries, results = {}, {}
     for task in tasks:
-        snapshot = build_snapshot(db,task=task['query'],role=task['role'],role_version=task['role_version'],max_steps=switch_max_steps,max_model_calls=switch_max_model_calls,max_characters=switch_view_characters,include_proposed=include_proposed,matched_candidates=True)
+        snapshot = build_snapshot(db,task=task['query'],role=task['role'],role_version=task['role_version'],max_steps=switch_max_steps,max_model_calls=switch_max_model_calls,max_characters=switch_view_characters,include_proposed=include_proposed,matched_candidates=True,choice_mode=switch_choice_mode)
         if snapshot['catalog_fingerprint'] != fingerprint:
             raise RuntimeError('catalog changed during experiment')
         started = time.monotonic()

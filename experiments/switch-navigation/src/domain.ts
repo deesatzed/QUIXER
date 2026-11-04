@@ -53,6 +53,27 @@ export function createNavigation(input: unknown): StateMachine<NavigationState> 
   const pick = picking<NavigationState, NavigationChoice>({
     instructions:'Choose one available evidence-gathering step or stop.', limit:100,
     choices: state => {
+      if (snapshot.choice_mode === 'bounded-v1') {
+        const words = (text:string) => new Set((text.toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? []));
+        const query = words(snapshot.task);
+        const ranked = [...snapshot.candidates].sort((a,b) => {
+          const score = (c:typeof a) => [...words(c.title+' '+c.body+' '+c.topics.join(' '))].filter(w=>query.has(w)).length;
+          return score(b)-score(a) || a.id.localeCompare(b.id);
+        });
+        const page = Math.min((typeof state['choice_page'] === 'number' ? state['choice_page'] : 0),Math.max(0,Math.ceil(ranked.length/6)-1));
+        const visible = ranked.slice(page*6,page*6+6);
+        const options:NavigationChoice[]=[];
+        const topics=[...new Set(visible.flatMap(c=>c.topics))].filter(t=>[...words(t)].some(w=>query.has(w))).sort().slice(0,2);
+        for (const topic of topics) if (!state.visited_topics.includes(topic)) options.push({type:'inspect_topic',key:`topic:${topic}`,target:topic,text:`Inspect topic: ${topic}`});
+        for (const c of visible) if (!state.evidence.some(e=>e.id===c.id)) {
+          const snippet=c.body.replace(/\s+/g,' ').slice(0,100);
+          options.push({type:'inspect_span',key:`span:${c.id}`,target:c.id,text:`Inspect passage: ${c.title} [source ${c.id}] — ${snippet}`});
+        }
+        if (page>0) options.push({type:'broaden',key:'page:previous',target:'previous',text:'Previous candidates'});
+        if ((page+1)*6<ranked.length) options.push({type:'broaden',key:'page:next',target:'next',text:'Next candidates'});
+        options.push({type:'stop',key:'stop',target:'',text:'Stop gathering',priority:-1});
+        return options;
+      }
       const candidates = snapshot.candidates.filter(c => c.tier === 'initial' || state.broadened);
       const options: NavigationChoice[] = [];
       for (const topic of [...new Set(candidates.flatMap(c => c.topics))].sort()) {
@@ -69,9 +90,12 @@ export function createNavigation(input: unknown): StateMachine<NavigationState> 
     transition: async (state,choice) => {
       const steps = state.steps + 1;
       if (choice.type === 'stop') return {...state,steps,done:true,reason:null};
-      if (choice.type === 'broaden') return {...state,steps,broadened:true};
+      if (choice.type === 'broaden') {
+        if (snapshot.choice_mode === 'bounded-v1') return {...state,steps,broadened:true,choice_page:Math.max(0,(typeof state['choice_page'] === 'number' ? state['choice_page'] : 0)+(choice.target === 'previous' ? -1 : 1))};
+        return {...state,steps,broadened:true};
+      }
       if (choice.type === 'inspect_topic') {
-        const members = snapshot.candidates.filter(c => (c.tier === 'initial' || state.broadened) && c.topics.includes(choice.target));
+        const members = snapshot.candidates.filter(c => (snapshot.choice_mode === 'bounded-v1' || c.tier === 'initial' || state.broadened) && c.topics.includes(choice.target));
         const candidate_ids = members.map(c => c.id);
         const annotations = members.flatMap(c => {
           const matches=(c.topic_annotations ?? []).filter(a => a.topic===choice.target);

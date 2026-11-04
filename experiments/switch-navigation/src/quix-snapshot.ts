@@ -33,6 +33,7 @@ export const snapshotSchema = z.object({
   max_steps:z.number().int().min(1).max(20), max_characters:z.number().int().min(256).max(100000),
   max_model_calls:z.number().int().min(1).max(60).default(20),
   candidate_scope:z.enum(['sections_and_records','variant_specific']).default('variant_specific'),
+  choice_mode:z.literal('bounded-v1').optional(),
   candidates:z.array(candidate).max(100),
 }).strict().refine(s => new Set(s.candidates.map(c => c.id)).size === s.candidates.length, 'candidate IDs must be unique');
 

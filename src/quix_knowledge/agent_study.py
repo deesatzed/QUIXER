@@ -9,6 +9,24 @@ import time
 CONDITIONS=('none','baseline','role','switch')
 
 
+def run_agent_retrieval_comparison(db, tasks, *, switch_runner, count_tokens, provider):
+    """Run the live agent-study retrieval path with an explicit decision provider."""
+    if provider is None or not callable(provider):
+        raise ValueError('decision provider required for new agent retrieval')
+    from .switch_comparison import run_switch_comparison
+    return run_switch_comparison(db,tasks,switch_runner=switch_runner,packet_tokens=2000,
+        count_tokens=count_tokens,tokenizer_name='cl100k_base',limit=3,provider=provider,
+        include_proposed=True,ranking='bm25',switch_choice_mode='bounded-v1',switch_max_steps=20,switch_max_model_calls=20)
+
+
+def retrieval_provider_provenance(report):
+    manifest=report.get('manifest',{}) if isinstance(report,dict) else {}
+    configured=manifest.get('provider_configured'); provider=manifest.get('provider')
+    if type(configured) is not bool or (configured and not isinstance(provider,dict)) or (not configured and provider is not None):
+        raise ValueError('retrieval provider provenance unavailable')
+    return {'configured':configured,'provider':copy.deepcopy(provider)}
+
+
 def validate_agent_manifest(manifest):
     if not isinstance(manifest,dict) or manifest.get('schema')!='quix-agent-study-manifest-v1':
         raise ValueError('invalid agent manifest')
