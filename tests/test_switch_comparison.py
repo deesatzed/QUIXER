@@ -98,3 +98,14 @@ def test_replayed_retrieval_rejects_modified_source_body(tmp_path):
     item['body']=item['body'][:4]; item['body_truncated']=False
     with pytest.raises(ValueError,match='truncat'):
         validate_replay_evidence(db,altered,tasks)
+
+
+def test_switch_runner_passes_explicit_model_without_secret_in_arguments(tmp_path):
+    import json,sys
+    from quix_knowledge.switch_comparison import NodeSwitchRunner
+    script=tmp_path/'runner.py'
+    script.write_text('import json,os,sys\njson.load(sys.stdin)\nprint(json.dumps({"model":os.environ.get("QUIX_DECISION_MODEL"),"argv":sys.argv}))\n')
+    run=NodeSwitchRunner(sys.executable,script,mode='openrouter',model='morph/reflex')
+    result=run({'task':'example'})
+    assert result['model']=='morph/reflex'
+    assert 'morph/reflex' not in result['argv']

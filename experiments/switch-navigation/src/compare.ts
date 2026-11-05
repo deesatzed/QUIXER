@@ -24,7 +24,8 @@ async function main():Promise<void> {
     if (!label) throw new Error('no available choice');
     return answered({pick:{type:'choice',choice:label,probabilities:{[label]:1},confidence:1}});
   });
-  const provider=mode==='openrouter' ? new OpenRouterDecider({...await loadOpenRouterSettings(process.env.QUIX_OPENROUTER_ENV ?? '/Volumes/WS4TB/QUIX/.env',Number(process.env.QUIX_MODEL_SLOT ?? '2')),trials:2,maxRequests:Math.min(100,snapshot.max_model_calls*2),timeoutMs:15000}) : null;
+  const settings=mode==='openrouter' ? await loadOpenRouterSettings(process.env.QUIX_OPENROUTER_ENV ?? '/Volumes/WS4TB/QUIX/.env',Number(process.env.QUIX_MODEL_SLOT ?? '2')) : null;
+  const provider=settings ? new OpenRouterDecider({...settings,model:process.env.QUIX_DECISION_MODEL ?? settings.model,trials:2,maxRequests:Math.min(100,snapshot.max_model_calls*2),timeoutMs:15000}) : null;
   const result=await navigate(snapshot,provider ?? fixture);
   console.log(JSON.stringify({status:result.status,reason:result.reason,decision_detail:result.error,state:result.state,trace:result.trace.entries,model_requests:result.model_requests,logical_calls:result.model_calls,provider:provider?.model ?? 'fixture',receipts:provider?.receipts ?? []}));
 }

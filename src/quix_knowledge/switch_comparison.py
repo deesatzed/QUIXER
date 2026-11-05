@@ -17,9 +17,11 @@ from .switch_snapshot import build_snapshot
 
 class NodeSwitchRunner:
     """Invoke the configured local switch adapter without a shell or credentials in argv."""
-    def __init__(self, node, script, *, mode, env_file='/Volumes/WS4TB/QUIX/.env', model_slot=2, timeout=60):
+    def __init__(self, node, script, *, mode, env_file='/Volumes/WS4TB/QUIX/.env', model_slot=2, timeout=60, model=None):
         if mode not in ('fixture','openrouter') or type(model_slot) is not int or model_slot not in (1,2,3,4) or not isinstance(timeout,(int,float)) or isinstance(timeout,bool) or not 0 < timeout <= 60:
             raise ValueError('invalid switch runner configuration')
+        if model is not None and (not isinstance(model,str) or not model.strip()): raise ValueError('invalid decision model')
+        self.model=model
         self.node, self.script, self.mode = str(node),str(Path(script).resolve()),mode
         self.env_file, self.model_slot, self.timeout = str(env_file),model_slot,timeout
 
@@ -28,6 +30,7 @@ class NodeSwitchRunner:
         if len(payload)>24_000_000:
             raise ValueError('switch snapshot exceeds input limit')
         env={'PATH':os.environ.get('PATH','/usr/bin:/bin'),'QUIX_OPENROUTER_ENV':self.env_file,'QUIX_MODEL_SLOT':str(self.model_slot)}
+        if self.model is not None: env['QUIX_DECISION_MODEL']=self.model
         with tempfile.TemporaryFile() as output:
             result=subprocess.run([self.node,self.script,self.mode],input=payload,stdout=output,stderr=subprocess.DEVNULL,env=env,timeout=self.timeout,check=False)
             if result.returncode != 0 or output.tell()>24_000_000:
