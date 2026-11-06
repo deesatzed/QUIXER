@@ -66,6 +66,19 @@ def test_adapter_rechecks_after_search(tmp_path, monkeypatch):
         contract.retrieve_context(db, {'version': 1, 'task': 'retry', 'role': 'reviewer', 'role_version': '1', 'limit': 3, 'budget_characters': 3000})
 
 
+def test_recovery_rechecks_selected_source_after_packet_creation(tmp_path, monkeypatch):
+    import quix_knowledge.hitm as contract
+    from quix_knowledge.evidence_recovery import EvidenceRejected
+    db=open_catalog(':memory:'); path=tmp_path/'manual.txt'
+    path.write_text('retry evidence'); ingest(db,path)
+    original=contract.build_context_packet
+    def change_after_packet(*args,**kwargs):
+        packet=original(*args,**kwargs); path.write_text('changed evidence'); return packet
+    monkeypatch.setattr(contract,'build_context_packet',change_after_packet)
+    request={'version':1,'task':'retry','role':'reviewer','role_version':'1','limit':1,'budget_characters':3000}
+    with pytest.raises(EvidenceRejected,match='source_changed'):contract.retrieve_recovery_context(db,request)
+
+
 @pytest.mark.parametrize('input_request', [None, {}, {'version': True}, {'version': 2}, {'version': 1, 'task': 'x', 'role': 'r', 'role_version': '1', 'limit': True, 'budget_characters': 100}])
 def test_adapter_rejects_malformed_request(input_request):
     from quix_knowledge.hitm import retrieve_context

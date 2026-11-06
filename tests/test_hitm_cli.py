@@ -93,3 +93,24 @@ def test_one_shot_checks_pdf_bytes_and_page_anchor(tmp_path):
     assert result['packet']['results'][0]['page_start'] == 1
     source.write_bytes(source.read_bytes() + b'\n')
     assert json.loads(invoke(catalog,json.dumps(request)).stdout)['error']['code'] == 'source_changed'
+
+
+def test_recovery_command_replaces_missing_source_and_reports_exclusion(tmp_path):
+    missing=tmp_path/'missing.txt'; kept=tmp_path/'kept.txt'
+    missing.write_text('retry retry missing evidence'); kept.write_text('retry evidence alternative')
+    catalog=tmp_path/'catalog.db'; db=open_catalog(catalog)
+    ingest(db,missing); ingest(db,kept); db.close(); missing.unlink()
+    before=hashlib.sha256(catalog.read_bytes()).digest()
+    request={'version':1,'task':'retry missing evidence','role':'reviewer','role_version':'1','limit':2,'budget_characters':5000}
+    env=dict(os.environ,PYTHONPATH=str(Path(__file__).resolve().parents[1]/'src'))
+    args=[sys.executable,'-m','quix_knowledge','--db',str(catalog),'hitm-recovery-context']
+    result=subprocess.run(args,input=json.dumps(request),text=True,capture_output=True,env=env,timeout=5)
+    assert result.returncode==0, result.stderr
+    response=json.loads(result.stdout)
+    assert response['packet']['task']==request['task']
+    assert response['packet']['results'][0]['path']==str(kept)
+    assert response['recovery']['excluded'][0]['reason']=='source_unavailable'
+    assert hashlib.sha256(catalog.read_bytes()).digest()==before
+    kept.unlink()
+    result=subprocess.run(args,input=json.dumps(request),text=True,capture_output=True,env=env,timeout=5)
+    assert json.loads(result.stdout)['error']['code']=='insufficient_evidence'

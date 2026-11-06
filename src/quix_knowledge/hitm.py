@@ -8,6 +8,7 @@ import sys
 from .context import build_context_packet
 from .retrieve import search
 from .store import corpus_fingerprint
+from .evidence_recovery import EvidenceRejected
 
 
 class SourceChanged(ValueError):
@@ -55,7 +56,29 @@ def retrieve_context(db, request):
     return {'version':1,'packet':packet}
 
 
-def cli_context(catalog_path):
+def retrieve_recovery_context(db, request):
+    """Build a role-ranked, source-checked packet and bounded recovery receipt."""
+    from .switch_snapshot import build_snapshot
+    from .evidence_recovery import recover_evidence, verify_evidence_candidate
+    _validate_request(request)
+    if request['limit'] < 1: raise ValueError('result limit must be positive')
+    snapshot=build_snapshot(db,task=request['task'],role=request['role'],role_version=request['role_version'],max_steps=5,max_characters=12000,matched_candidates=True,verify_all_sources=False)
+    rows=search(db,request['task'],variant='role',role=request['role'],role_version=request['role_version'],limit=100,ranking='bm25',include_generated=False)
+    bound={row['id']:row for row in snapshot['candidates']}
+    ranked=[bound[row['id']] for row in rows if row['id'] in bound]
+    recovery=recover_evidence(ranked,[],limit=request['limit'])
+    if corpus_fingerprint(db)!=snapshot['catalog_fingerprint']:raise ValueError('catalog changed during retrieval')
+    selected=recovery.pop('results')
+    for row in selected: row['context_truncated']=row.get('body_truncated',False)
+    packet=build_context_packet(request['task'],request['role'],request['role_version'],selected,budget=request['budget_characters'],count_tokens=len,tokenizer_name='json-characters',catalog_fingerprint=snapshot['catalog_fingerprint'])
+    recovery['shortfall_count']+=len(selected)-len(packet['results'])
+    if not packet['results']:recovery['status']='insufficient_evidence'
+    for row in selected:verify_evidence_candidate(row)
+    if corpus_fingerprint(db)!=snapshot['catalog_fingerprint']:raise ValueError('catalog changed during retrieval')
+    return {'version':1,'packet':packet,'recovery':recovery}
+
+
+def cli_context(catalog_path, recovery=False):
     """Read one bounded request and write one structured response without catalog writes."""
     def fail(code, message):
         print(json.dumps({'ok':False,'error':{'code':code,'message':message}}))
@@ -78,11 +101,18 @@ def cli_context(catalog_path):
         db.execute('PRAGMA query_only=ON')
         if db.execute('PRAGMA user_version').fetchone()[0] != 7:
             return fail('catalog_unavailable','catalog schema version is unsupported')
-        result = retrieve_context(db,request)
+        result = retrieve_recovery_context(db,request) if recovery else retrieve_context(db,request)
+        if recovery and result['recovery']['status']=='insufficient_evidence':
+            print(json.dumps({'ok':False,'error':{'code':'insufficient_evidence','message':'no verified evidence is available'},'recovery':result['recovery']},ensure_ascii=False))
+            return 1
         print(json.dumps({'ok':True,**result},ensure_ascii=False))
         return 0
     except SourceChanged:
         return fail('source_changed','a source is missing, unreadable or changed')
+    except EvidenceRejected as exc:
+        if str(exc) in ('source_changed','source_unavailable'):
+            return fail('source_changed','a selected source changed during retrieval')
+        return fail('unsupported_evidence','selected evidence failed verification')
     except ValueError as exc:
         code = 'budget_too_small' if str(exc) == 'budget is too small for packet metadata' else 'catalog_changed' if str(exc) == 'catalog changed during retrieval' else 'invalid_request'
         return fail(code,str(exc))

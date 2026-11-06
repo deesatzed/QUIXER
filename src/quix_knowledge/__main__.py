@@ -11,6 +11,7 @@ def main():
     parser.add_argument('--db', required=True)
     sub = parser.add_subparsers(dest='command', required=True)
     sub.add_parser('hitm-context',help='read one bounded context request from standard input')
+    sub.add_parser('hitm-recovery-context',help='read one bounded source-recovering context request')
     ingest_parser = sub.add_parser('ingest')
     ingest_parser.add_argument('path')
     sub.add_parser('refresh',help='reconcile known source files with the catalog')
@@ -147,6 +148,9 @@ def main():
     if args.command == 'hitm-context':
         from .hitm import cli_context
         return cli_context(args.db)
+    if args.command == 'hitm-recovery-context':
+        from .hitm import cli_context
+        return cli_context(args.db,recovery=True)
     db = open_catalog(args.db)
     try:
         def configured_provider():
