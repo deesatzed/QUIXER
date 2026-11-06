@@ -80,3 +80,35 @@ def test_snapshot_can_select_bounded_choices_without_changing_candidates(tmp_pat
     assert 'choice_mode' not in legacy
     assert bounded['choice_mode']=='bounded-v1'
     assert bounded['candidates']==legacy['candidates']
+
+
+def test_recoverable_snapshot_keeps_missing_source_visible_for_per_candidate_checks(tmp_path):
+    from quix_knowledge.store import open_catalog
+    from quix_knowledge.ingest import ingest
+    from quix_knowledge.switch_snapshot import build_snapshot
+    from quix_knowledge.evidence_recovery import recover_evidence
+    db=open_catalog(':memory:');a=tmp_path/'lost.txt';b=tmp_path/'kept.txt'
+    a.write_text('unavailable evidence');b.write_text('verified evidence');ingest(db,a);ingest(db,b);a.unlink()
+    kwargs=dict(task='evidence',role='reviewer',role_version='1',max_steps=5,max_characters=5000)
+    with pytest.raises(ValueError):build_snapshot(db,**kwargs)
+    snapshot=build_snapshot(db,verify_all_sources=False,**kwargs)
+    by_path={x['path']:x for x in snapshot['candidates']}
+    result=recover_evidence([by_path[str(a)]],[by_path[str(b)]],limit=1)
+    assert result['excluded'][0]['reason']=='source_unavailable'
+    assert result['results'][0]['path']==str(b)
+
+
+def test_catalog_recovery_prepares_request_and_detects_later_source_change(tmp_path):
+    from quix_knowledge.evidence_recovery import retrieve_recovered_context, verify_recovered_sources, EvidenceRejected
+    db=open_catalog(':memory:'); lost=tmp_path/'lost.txt'; kept=tmp_path/'kept.txt'
+    lost.write_text('evidence evidence missing'); kept.write_text('evidence kept')
+    ingest(db,lost); ingest(db,kept); lost.unlink()
+    task={'id':'t','query':'evidence missing','role':'reviewer','role_version':'1'}
+    result=retrieve_recovered_context(db,task,role_purpose='review evidence',limit=2,body_characters=100)
+    assert result['request'] is not None
+    assert result['recovery']['excluded'][0]['reason']=='source_unavailable'
+    assert result['recovery']['results'][0]['path']==str(kept)
+    assert 'source_unavailable' in result['request']['query']
+    verify_recovered_sources(db,result)
+    kept.write_text('changed evidence')
+    with pytest.raises(EvidenceRejected,match='source_changed'):verify_recovered_sources(db,result)

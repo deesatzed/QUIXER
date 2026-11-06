@@ -6,6 +6,7 @@ from quix_knowledge.ai_review_v2 import VERSION,validate_review
 from quix_knowledge.hitm import _check_sources
 from quix_knowledge.retrieval_study import verify_source_snapshot
 from quix_knowledge.research_cascade import unrecognized_hashes
+from quix_knowledge.evidence_recovery import add_recovery_notice
 from quix_knowledge.store import corpus_fingerprint
 p=argparse.ArgumentParser();p.add_argument('run');p.add_argument('study');p.add_argument('review');p.add_argument('output');p.add_argument('--retry');args=p.parse_args()
 root=Path(__file__).resolve().parents[2];run=Path(args.run);study=Path(args.study);review=Path(args.review);load=lambda path:json.loads(path.read_text());digest=lambda path:hashlib.sha256(path.read_bytes()).hexdigest()
@@ -18,11 +19,17 @@ try:
     validate_review_sources(db,source,source_manifest['tasks']);_check_sources(db)
     if corpus_fingerprint(db)!=prep['corpus_revision']:raise ValueError('catalog changed')
 finally:db.close()
-tasks={x['id']:x for x in manifest['tasks']};candidate={x['id']:x for x in source['candidates']}; runs={(x['task_id'],x['condition']):x for x in report['runs']};packetmap={(x['task_id'],x['condition']):x['packet'] for x in packets};expected={(t,c) for t in tasks for c in manifest['conditions']}
+tasks={x['id']:x for x in manifest['tasks']};candidate={x['id']:x for x in source['candidates']}; runs={(x['task_id'],x['condition']):x for x in report['runs']};packetrows={(x['task_id'],x['condition']):x for x in packets};packetmap={k:v['packet'] for k,v in packetrows.items()};expected={(t,c) for t in tasks for c in manifest['conditions']}
 if set(runs)!=expected or len(runs)!=len(report['runs']) or set(packetmap)!=expected or len(packetmap)!=len(packets) or set(map(tuple,schedule))!=expected or len(schedule)!=len(expected):raise ValueError('schedule or packet mismatch')
 for (tid,condition),packet in packetmap.items():
-    t=tasks[tid]
-    if packet['task']!=t['query'] or packet['role']!=t['role'] or packet['role_version']!=t['role_version'] or packet['catalog_fingerprint']!=prep['corpus_revision']:raise ValueError('packet task mismatch')
+    t=tasks[tid]; recovery=packetrows[(tid,condition)].get('recovery')
+    if packet is None:
+        if not recovery or recovery.get('status')!='insufficient_evidence' or runs[(tid,condition)]['status']!='insufficient_evidence':raise ValueError('missing packet without explicit failure')
+        continue
+    expected_task=t['query']
+    if recovery is not None:
+        expected_task=add_recovery_notice({'query':t['query'],'context':{'task':t['query']}},recovery)['query']
+    if packet['task']!=expected_task or packet['role']!=t['role'] or packet['role_version']!=t['role_version'] or packet['catalog_fingerprint']!=prep['corpus_revision']:raise ValueError('packet task mismatch')
     for item in packet['results']:
         c=candidate.get(item['id'])
         if c is None or c['record_type']!=item['record_type'] or not c['body'].startswith(item['body']):raise ValueError('packet content mismatch')
@@ -55,16 +62,16 @@ for condition in manifest['conditions']:
     outcomes=[];recalls=[]
     for tid,t in tasks.items():
         runrow=runs[(tid,condition)];review_id=next((k for k,v in key['mapping'].items() if v=={'task_id':tid,'condition':condition}),None);rr=final.get(('plan',review_id),{}) if review_id else {}
-        labels=final.get(('retrieval',tid),{}); verdict=labels.get('verdict',{}); essential=set(verdict.get('essential_ids',[])) if labels.get('status')=='ai_reviewed' else set(); found={x['id'] for x in packetmap[(tid,condition)]['results']}
+        labels=final.get(('retrieval',tid),{}); verdict=labels.get('verdict',{}); essential=set(verdict.get('essential_ids',[])) if labels.get('status')=='ai_reviewed' else set(); found={x['id'] for x in (packetmap[(tid,condition)] or {}).get('results',[])}
         if essential:recalls.append(len(essential & found)/len(essential))
-        output=runrow.get('output',''); unknown_citations=unrecognized_hashes(output,packetmap[(tid,condition)])
-        item={'task_id':tid,'run_status':runrow['status'],'review_status':rr.get('status','missing_output'),'review':rr.get('verdict'),'essential_count':len(essential) if essential else None,'essential_ids_found':len(found&essential) if essential else None,'unrecognized_full_hex_tokens':unknown_citations,'call':runrow.get('call'),'escalation_signal':runrow.get('escalation_signal'),'signals':runrow.get('signals')}
+        output=runrow.get('output',''); unknown_citations=unrecognized_hashes(output,packetmap[(tid,condition)] or {'results':[]})
+        item={'task_id':tid,'run_status':runrow['status'],'review_status':rr.get('status','missing_output'),'review':rr.get('verdict'),'essential_count':len(essential) if essential else None,'essential_ids_found':len(found&essential) if essential else None,'unrecognized_full_hex_tokens':unknown_citations,'call':runrow.get('call'),'escalation_signal':runrow.get('escalation_signal'),'signals':runrow.get('signals'),'recovery':packetrows[(tid,condition)].get('recovery')}
         outcomes.append(item);case.append(item|{'condition':condition})
     per_condition[condition]={'statuses':dict(collections.Counter(x['run_status'] for x in outcomes)),'review_statuses':dict(collections.Counter(x['review_status'] for x in outcomes)),'mean_essential_id_recall_against_ai_labels':statistics.mean(recalls) if recalls else None,'tasks':outcomes}
 def money(items):
     vals=[x if isinstance(x,(int,float)) and not isinstance(x,bool) and math.isfinite(x) and x>=0 else None for x in items]
     return {'known_usd':sum(x for x in vals if x is not None),'unknown_count':sum(x is None for x in vals),'calls':len(vals)}
-planner_cost=money([(x.get('call') or {}).get('costUSD') for x in report['runs'] if x['status'] not in ('unsupported_or_stale_evidence','context_invalid','intent_too_large')]); review_cost=money([(x.get('usage') or {}).get('cost') for x in attempts]);rerank_cost=money([(x['rerank'].get('usage') or {}).get('cost') for x in stages.values()]);receipts=[i for x in stages.values() for i in (x['switch'].get('receipts') or [])];switch_cost=money([(x.get('usage') or {}).get('cost') for x in receipts]);prompt_tokens={c:[(x.get('call') or {}).get('promptTokens') for x in report['runs'] if x['condition']==c] for c in manifest['conditions']}
+planner_cost=money([(x.get('call') or {}).get('costUSD') for x in report['runs'] if x.get('planner_attempted',x['status'] not in ('unsupported_or_stale_evidence','context_invalid','intent_too_large','insufficient_evidence'))]); review_cost=money([(x.get('usage') or {}).get('cost') for x in attempts]);rerank_cost=money([(x['rerank'].get('usage') or {}).get('cost') for x in stages.values()]);receipts=[i for x in stages.values() for i in (x['switch'].get('receipts') or [])];switch_cost=money([(x.get('usage') or {}).get('cost') for x in receipts]);prompt_tokens={c:[(x.get('call') or {}).get('promptTokens') for x in report['runs'] if x['condition']==c] for c in manifest['conditions']}
 summary={'schema':'quix-cascade-pilot-analysis-v1','reviewer_type':'AI, not independently validated','corpus_revision':prep['corpus_revision'],'conditions':per_condition,'retrieval_review_statuses':dict(collections.Counter(final.get(('retrieval',tid),{}).get('status','missing') for tid in tasks)),'costs':{'planner':planner_cost,'rerank':rerank_cost,'reflex':switch_cost,'ai_review':review_cost},'planner_prompt_tokens':prompt_tokens,'switch_statuses':dict(collections.Counter((x['switch']['status'] or 'unknown')+':'+str(x['switch'].get('reason')) for x in stages.values())),'rerank_statuses':dict(collections.Counter(x['rerank']['status'] for x in stages.values())),'recorded_artifact_hashes':{k:('verified' if report.get(k) else 'not_recorded') for k in ('stage_sha256','packets_sha256','schedule_sha256')},'limitations':['Same explored corpus; four new tasks, not independently held out.','AI-generated essential labels and plan assessments are unvalidated proxies.','Exact-ID overlap does not verify that truncated context includes the needed passage.','Full model input budgets and cost differ by condition.','The hex-token check excludes supplied IDs and revision hashes but is not a citation validator; short IDs and paraphrases are not checked.','Evidence source checks are point-in-time.','Shared retrieval stages incur costs once in this experimental design.']}
 with Path(args.output).open('x') as f:json.dump(summary,f,indent=2)
 print(json.dumps({'conditions':{c:{k:v for k,v in x.items() if k!='tasks'} for c,x in per_condition.items()},'costs':summary['costs'],'switch':summary['switch_statuses'],'review':summary['retrieval_review_statuses']}))
